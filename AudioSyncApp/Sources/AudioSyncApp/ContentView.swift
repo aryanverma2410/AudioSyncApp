@@ -90,6 +90,34 @@ struct ContentView: View {
             .disabled(!appState.isActive)
             .help("Measure latency and auto-compensate delays so all speakers sync")
 
+            Separator()
+
+            // Metronome
+            HStack(spacing: 4) {
+                Button {
+                    if appState.outputEngine.isMetronomeOn {
+                        appState.outputEngine.stopMetronome()
+                    } else {
+                        appState.outputEngine.startMetronome(bpm: appState.outputEngine.metronomeBPM)
+                    }
+                } label: {
+                    Image(systemName: appState.outputEngine.isMetronomeOn ? "metronome.fill" : "metronome")
+                        .font(.caption)
+                        .foregroundColor(appState.outputEngine.isMetronomeOn ? .accentColor : .secondary)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!appState.isActive)
+                .help("Toggle metronome click")
+
+                Stepper("\(appState.outputEngine.metronomeBPM)", value: Binding(
+                    get: { appState.outputEngine.metronomeBPM },
+                    set: { appState.outputEngine.setMetronomeBPM($0) }
+                ), in: 40...240, step: 5)
+                    .font(.system(size: 10, design: .monospaced))
+                    .controlSize(.mini)
+            }
+
             Button {
                 appState.deviceDiscovery.refreshDevices()
             } label: {

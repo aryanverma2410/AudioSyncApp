@@ -526,6 +526,69 @@ final class MultiOutputEngine: ObservableObject {
         return 1.0
     }
 
+    // MARK: - Metronome
+
+    private var metronomeTimer: DispatchSourceTimer?
+    @Published var isMetronomeOn = false
+    @Published var metronomeBPM: Int = 120
+
+    func startMetronome(bpm: Int = 120) {
+        guard !isMetronomeOn else { return }
+        metronomeBPM = bpm
+        isMetronomeOn = true
+        let intervalNs = UInt64(60_000_000_000 / UInt64(bpm)) // nanoseconds per beat
+        let queue = DispatchQueue(label: "com.audiosync.metronome", qos: .userInteractive)
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now(), repeating: .nanoseconds(Int(intervalNs)), leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in
+            self?.tickMetronome()
+        }
+        timer.resume()
+        metronomeTimer = timer
+        tickMetronome() // Immediate first tick
+        DLog("[Metronome] Started at \(bpm) BPM")
+    }
+
+    func stopMetronome() {
+        metronomeTimer?.cancel()
+        metronomeTimer = nil
+        isMetronomeOn = false
+        DLog("[Metronome] Stopped")
+    }
+
+    func setMetronomeBPM(_ bpm: Int) {
+        metronomeBPM = bpm
+        if isMetronomeOn {
+            stopMetronome()
+            startMetronome(bpm: bpm)
+        }
+    }
+
+    private func tickMetronome() {
+        // Write a short click to all active ring buffers
+        for (_, output) in deviceOutputs {
+            writeClick(to: output.buffer, sampleRate: engineFormat.sampleRate)
+        }
+    }
+
+    private func writeClick(to buffer: DelayedRingBuffer, sampleRate: Double) {
+        let clickDuration = 0.01 // 10ms click
+        let totalFrames = AVAudioFrameCount(sampleRate * clickDuration)
+
+        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: engineFormat, frameCapacity: totalFrames) else { return }
+        pcmBuffer.frameLength = totalFrames
+
+        for frame in 0..<Int(totalFrames) {
+            let envelope = cosineEnvelope(frame: frame, totalFrames: Int(totalFrames), sampleRate: sampleRate)
+            // 1000Hz sharp click
+            let value = Float(sin(2.0 * .pi * 1000.0 * Double(frame) / sampleRate) * 0.9) * envelope
+            pcmBuffer.floatChannelData?[0][frame] = value
+            pcmBuffer.floatChannelData?[1][frame] = value
+        }
+
+        buffer.write(pcmBuffer)
+    }
+
     /// Latest peak level from audio capture (for diagnostics)
     private let _lastTapPeak = AtomicFloat(0)
 
@@ -557,31 +620,48 @@ final class MultiOutputEngine: ObservableObject {
 
     // MARK: - Auto-Delay Compensation
 
-    /// Measure per-device inherent latency by sampling ring buffer positions multiple times.
-    /// Only includes devices whose UIDs are in `enabledUIDs`.
-    /// Returns inherent latency in ms for each device UID (subtracting any already-applied delay).
+    /// Measure per-device inherent latency by sampling ring buffer positions.
+    /// Temporarily zeros all delays so ring buffer fill reflects hardware latency only
+    /// (not our added delay). Differences in fill level reveal BT codec latency etc.
     @MainActor
     func measureLatencies(enabledUIDs: Set<String>, currentDelays: [String: Float] = [:], sampleCount: Int = 5) -> [String: Float] {
+        // Step 1: Zero all delays so ring buffer fill = safetyFrames + hardware_latency
+        for uid in enabledUIDs {
+            if let output = deviceOutputs[uid] {
+                output.buffer.setDelay(ms: 0, sampleRate: engineFormat.sampleRate)
+            }
+        }
+        // Wait for buffers to settle at the new delay (reader needs a few cycles)
+        usleep(300_000) // 300ms settle time
+        
         var samples: [String: [Float]] = [:]
         for uid in enabledUIDs {
             samples[uid] = []
         }
         
-        // Take multiple samples with small delays between them
+        // Step 2: Sample fill levels with zero delay
         for i in 0..<sampleCount {
             for uid in enabledUIDs {
                 guard let output = deviceOutputs[uid] else { continue }
                 let wp = output.buffer.currentWritePos
                 let rp = output.buffer.currentReadPos
-                let totalFillFrames = max(wp - rp, 0)
-                let totalFillMs = Float(Double(totalFillFrames) / engineFormat.sampleRate * 1000.0)
-                // Subtract the delay we already applied — only inherent latency remains
-                let currentDelayMs = currentDelays[uid] ?? 0
-                let inherentMs = max(totalFillMs - currentDelayMs, 0)
+                let fillFrames = max(wp - rp, 0)
+                let fillMs = Float(Double(fillFrames) / engineFormat.sampleRate * 1000.0)
+                // Subtract safety margin — what remains is inherent hardware latency
+                let safetyMs = Float(Double(kSafetyFrames) / engineFormat.sampleRate * 1000.0)
+                let inherentMs = max(fillMs - safetyMs, 0)
                 samples[uid]?.append(inherentMs)
             }
             if i < sampleCount - 1 {
                 usleep(100_000) // 100ms between samples
+            }
+        }
+        
+        // Step 3: Restore original delays
+        for uid in enabledUIDs {
+            if let output = deviceOutputs[uid] {
+                let originalDelay = currentDelays[uid] ?? 0
+                output.buffer.setDelay(ms: originalDelay, sampleRate: engineFormat.sampleRate)
             }
         }
         
