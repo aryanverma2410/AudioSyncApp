@@ -25,9 +25,17 @@ class AppState: ObservableObject {
         systemCapturer.captureMethod.rawValue
     }
 
+    // MARK: - Persistence Keys
+    
+    private static let kSettingsKey = "com.audiosync.deviceSettings"
+    private static let kOrderKey = "com.audiosync.deviceOrder"
+
     // MARK: - Init
 
     init() {
+        // Restore persisted settings
+        restoreSettings()
+        
         // Wire up the capturer to write DIRECTLY to ring buffers.
         // distributeAudioDirect is nonisolated (thread-safe), so calling from
         // the capturer's background queue is fine. This bypasses AVAudioEngine
@@ -64,6 +72,19 @@ class AppState: ObservableObject {
                     self?.syncNewDevices()
                 }
             }
+            .store(in: &cancellables)
+
+        // Auto-save settings whenever they change
+        $deviceSettings
+            .dropFirst() // skip initial restored value
+            .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveSettings() }
+            .store(in: &cancellables)
+
+        $deviceOrder
+            .dropFirst()
+            .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveSettings() }
             .store(in: &cancellables)
     }
 
@@ -319,6 +340,27 @@ class AppState: ObservableObject {
         } else {
             deviceSettings[uid] = DeviceSettings()
         }
+    }
+
+    // MARK: - Persistence
+
+    private func saveSettings() {
+        let defaults = UserDefaults.standard
+        if let encoded = try? JSONEncoder().encode(deviceSettings) {
+            defaults.set(encoded, forKey: Self.kSettingsKey)
+        }
+        defaults.set(deviceOrder, forKey: Self.kOrderKey)
+        DLog("[AppState] Settings saved (\(deviceSettings.count) devices)")
+    }
+
+    private func restoreSettings() {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: Self.kSettingsKey),
+           let saved = try? JSONDecoder().decode([String: DeviceSettings].self, from: data) {
+            deviceSettings = saved
+            DLog("[AppState] Restored \(saved.count) device settings")
+        }
+        deviceOrder = defaults.stringArray(forKey: Self.kOrderKey) ?? []
     }
 
 }
