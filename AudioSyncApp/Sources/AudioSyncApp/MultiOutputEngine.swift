@@ -557,11 +557,11 @@ final class MultiOutputEngine: ObservableObject {
 
     // MARK: - Auto-Delay Compensation
 
-    /// Measure per-device latency by sampling ring buffer positions multiple times.
+    /// Measure per-device inherent latency by sampling ring buffer positions multiple times.
     /// Only includes devices whose UIDs are in `enabledUIDs`.
-    /// Returns ms behind writer for each device UID, averaged over `sampleCount` readings.
+    /// Returns inherent latency in ms for each device UID (subtracting any already-applied delay).
     @MainActor
-    func measureLatencies(enabledUIDs: Set<String>, sampleCount: Int = 5) -> [String: Float] {
+    func measureLatencies(enabledUIDs: Set<String>, currentDelays: [String: Float] = [:], sampleCount: Int = 5) -> [String: Float] {
         var samples: [String: [Float]] = [:]
         for uid in enabledUIDs {
             samples[uid] = []
@@ -573,9 +573,12 @@ final class MultiOutputEngine: ObservableObject {
                 guard let output = deviceOutputs[uid] else { continue }
                 let wp = output.buffer.currentWritePos
                 let rp = output.buffer.currentReadPos
-                let framesBehind = max(wp - rp, 0)
-                let msBehind = Float(Double(framesBehind) / engineFormat.sampleRate * 1000.0)
-                samples[uid]?.append(msBehind)
+                let totalFillFrames = max(wp - rp, 0)
+                let totalFillMs = Float(Double(totalFillFrames) / engineFormat.sampleRate * 1000.0)
+                // Subtract the delay we already applied — only inherent latency remains
+                let currentDelayMs = currentDelays[uid] ?? 0
+                let inherentMs = max(totalFillMs - currentDelayMs, 0)
+                samples[uid]?.append(inherentMs)
             }
             if i < sampleCount - 1 {
                 usleep(100_000) // 100ms between samples
@@ -588,7 +591,7 @@ final class MultiOutputEngine: ObservableObject {
             let avg = vals.reduce(0, +) / Float(vals.count)
             latencies[uid] = avg
             if let output = deviceOutputs[uid] {
-                DLog("[AutoDelay] '\(output.device.name)': avg \(String(format: "%.1f", avg))ms behind (samples: \(vals.map { String(format: "%.0f", $0) }.joined(separator: ", ")))")
+                DLog("[AutoDelay] '\(output.device.name)': avg \(String(format: "%.1f", avg))ms inherent (samples: \(vals.map { String(format: "%.0f", $0) }.joined(separator: ", ")))")
             }
         }
         return latencies
@@ -596,22 +599,25 @@ final class MultiOutputEngine: ObservableObject {
 
     /// Apply auto-delay compensation: most-delayed speaker = 0ms, others offset upward.
     /// Only considers devices in `enabledUIDs`.
-    /// Returns the applied delays keyed by device UID.
+    /// Measurement subtracts already-applied delay to get INHERENT latency,
+    /// preventing oscillation when run multiple times.
+    /// Returns the TOTAL delay (compensation only) keyed by device UID.
     @MainActor
-    func applyAutoDelayCompensation(enabledUIDs: Set<String>) -> [String: Float] {
-        let latencies = measureLatencies(enabledUIDs: enabledUIDs)
+    func applyAutoDelayCompensation(enabledUIDs: Set<String>, currentDelays: [String: Float] = [:]) -> [String: Float] {
+        let latencies = measureLatencies(enabledUIDs: enabledUIDs, currentDelays: currentDelays)
         guard !latencies.isEmpty else { return [:] }
         let maxLatency = latencies.values.max() ?? 0
 
         var compensated: [String: Float] = [:]
         for (uid, latency) in latencies {
-            let offset = max(maxLatency - latency, 0)
+            // Compensation = how much EXTRA delay this device needs vs the most-delayed one
+            let compensation = max(maxLatency - latency, 0)
             // Round to nearest 5ms for cleaner display
-            let rounded = round(offset / 5.0) * 5.0
+            let rounded = round(compensation / 5.0) * 5.0
             compensated[uid] = rounded
             if let output = deviceOutputs[uid] {
                 output.buffer.setDelay(ms: rounded, sampleRate: engineFormat.sampleRate)
-                DLog("[AutoDelay] '\(output.device.name)' → \(String(format: "%.0f", rounded))ms (was \(String(format: "%.1f", latency))ms behind)")
+                DLog("[AutoDelay] '\(output.device.name)' → \(String(format: "%.0f", rounded))ms compensation (inherent \(String(format: "%.1f", latency))ms)")
             }
         }
         return compensated
@@ -673,6 +679,7 @@ final class MultiOutputEngine: ObservableObject {
         Unmanaged<NSString>.fromOpaque(output.uidBox).release()
         MultiOutputEngine.bufferLookup.remove(deviceUID)
         MultiOutputEngine.volumeLookup.remove(deviceUID)
+        _levelLookup.remove(deviceUID)
         deviceOutputs.removeValue(forKey: deviceUID)
         activeDeviceCount = deviceOutputs.count
     }

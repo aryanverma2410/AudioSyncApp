@@ -267,7 +267,8 @@ class AppState: ObservableObject {
             deviceSettings.filter { _, s in s.isEnabled }
                 .map { uid, _ in uid }
         )
-        let compensated = outputEngine.applyAutoDelayCompensation(enabledUIDs: enabledUIDs)
+        let currentDelays: [String: Float] = deviceSettings.compactMapValues { $0.isEnabled ? $0.delayMs : nil }
+        let compensated = outputEngine.applyAutoDelayCompensation(enabledUIDs: enabledUIDs, currentDelays: currentDelays)
         for (uid, delayMs) in compensated {
             deviceSettings[uid]?.delayMs = delayMs
         }
