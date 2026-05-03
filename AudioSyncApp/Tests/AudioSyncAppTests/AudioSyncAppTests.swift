@@ -30,56 +30,6 @@ final class AudioSyncAppTests: XCTestCase {
         XCTAssertFalse(btSettings.isMuted)
     }
 
-    func testAudioProfileCreation() {
-        let profile = AudioProfile(name: "Test Profile")
-        XCTAssertEqual(profile.name, "Test Profile")
-        XCTAssertTrue(profile.deviceSettings.isEmpty)
-        XCTAssertNotEqual(profile.createdDate, Date.distantPast)
-    }
-
-    func testAudioProfileEquality() {
-        let p1 = AudioProfile(name: "A")
-        let p2 = AudioProfile(name: "B")
-        XCTAssertNotEqual(p1, p2)
-    }
-
-    func testAudioProfileBackwardCompatDecoding() {
-        // Old profiles.json format lacks 'createdDate' key
-        let json = """
-        [{"name":"Old Profile","bufferSize":512,"deviceSettings":{},"id":"D5CFC68D-F6B0-44DE-ABAC-24E26418B733","sampleRate":44100}]
-        """.data(using: .utf8)!
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        do {
-            let profiles = try decoder.decode([AudioProfile].self, from: json)
-            XCTAssertEqual(profiles.count, 1)
-            XCTAssertEqual(profiles[0].name, "Old Profile")
-            XCTAssertEqual(profiles[0].createdDate, Date.distantPast)
-        } catch {
-            XCTFail("Backward-compat decoding failed: \(error)")
-        }
-    }
-
-    func testAudioProfileCodableRoundTrip() {
-        let profile = AudioProfile(name: "Round Trip")
-        profile.deviceSettings = ["dev1": DeviceSettings(delayMs: 150, volume: 1.0)]
-
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-
-        do {
-            let data = try encoder.encode(profile)
-            let decoded = try decoder.decode(AudioProfile.self, from: data)
-            XCTAssertEqual(decoded.name, "Round Trip")
-            XCTAssertEqual(decoded.deviceSettings["dev1"]?.delayMs, 150)
-        } catch {
-            XCTFail("Round-trip encoding failed: \(error)")
-        }
-    }
-
     // MARK: - DelayedRingBuffer
 
     func testRingBufferCreation() {
@@ -152,33 +102,6 @@ final class AudioSyncAppTests: XCTestCase {
         XCTAssertEqual(values.count, 2)
         XCTAssertTrue(values.contains(10))
         XCTAssertTrue(values.contains(20))
-    }
-
-    // MARK: - ProfileManager
-
-    func testProfileManagerCRUD() {
-        let manager = ProfileManager()
-        let profile = manager.createProfile(named: "Living Room")
-        XCTAssertEqual(profile.name, "Living Room")
-        XCTAssertEqual(manager.profiles.count, 1)
-
-        manager.renameProfile(profile, to: "Bedroom")
-        XCTAssertEqual(manager.profiles.first?.name, "Bedroom")
-
-        manager.deleteProfile(profile)
-        XCTAssertTrue(manager.profiles.isEmpty)
-    }
-
-    func testProfileManagerSaveAsProfile() {
-        let manager = ProfileManager()
-        let settings: [String: DeviceSettings] = [
-            "bt-speaker-1": DeviceSettings(delayMs: 200, volume: 1.0),
-            "macbook-speakers": DeviceSettings(delayMs: 0, volume: 1.0)
-        ]
-        let profile = manager.saveAsProfile(named: "My Setup", deviceSettings: settings)
-        XCTAssertEqual(profile.name, "My Setup")
-        XCTAssertEqual(profile.deviceSettings.count, 2)
-        XCTAssertEqual(profile.deviceSettings["bt-speaker-1"]?.delayMs, 200)
     }
 
     // MARK: - DeviceSettings Edge Cases

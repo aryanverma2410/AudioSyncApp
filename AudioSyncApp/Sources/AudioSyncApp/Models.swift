@@ -74,6 +74,8 @@ struct DeviceSettings: Equatable, Codable {
         volume: 1.0,
         isMuted: false
     )
+
+    static let maxDelayMs: Float = 1000
 }
 
 

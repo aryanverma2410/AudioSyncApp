@@ -2,11 +2,11 @@ import Foundation
 import SwiftUI
 import CoreAudio
 import AudioToolbox
+import Combine
 
 // MARK: - App State
 
-/// Central coordinator that ties together device discovery, system audio capture,
-/// multi-output routing, and profile management.
+/// Central coordinator: device discovery, system audio capture, multi-output routing.
 @MainActor
 class AppState: ObservableObject {
     let deviceDiscovery = DeviceDiscovery()
@@ -18,12 +18,7 @@ class AppState: ObservableObject {
     @Published var errorMessage: String?
     @Published var vuLevels: [String: Float] = [:]  // Per-device VU level (refreshed by timer)
     @Published var deviceOrder: [String] = []  // Device UIDs in display order
-
-    // Stored so AudioObjectAddPropertyListener callback pointer remains valid
-    private var deviceChangeAddr = AudioObjectPropertyAddress(
-        mSelector: kAudioHardwarePropertyDevices,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain)
+    private var cancellables = Set<AnyCancellable>()
 
     /// Human-readable description of the active capture method (for UI display).
     var captureMethodDescription: String {
@@ -61,21 +56,15 @@ class AppState: ObservableObject {
             }
         }
 
-        // Audio device hotplug: refresh device list when devices appear/disappear
-        AudioObjectAddPropertyListener(AudioObjectID(kAudioObjectSystemObject), &deviceChangeAddr, { _, _, _, _ -> Int32 in
-            DLog("[AppState] Audio device list changed — scheduling sync")
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .audioDevicesChanged, object: nil)
+        // Audio device hotplug: when DeviceDiscovery detects changes, sync new devices
+        deviceDiscovery.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.syncNewDevices()
+                }
             }
-            return noErr
-        }, nil)
-
-        // Auto-add new devices to active routing session
-        NotificationCenter.default.addObserver(forName: .audioDevicesChanged, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.syncNewDevices()
-            }
-        }
+            .store(in: &cancellables)
     }
 
     // MARK: - Start / Stop

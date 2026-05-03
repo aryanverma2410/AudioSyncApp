@@ -73,7 +73,7 @@ final class DeviceDiscovery: ObservableObject {
             ptr.toOpaque()
         )
         if status != noErr {
-            print("[DeviceDiscovery] Failed to add property listener: \(status)")
+            DLog("[DeviceDiscovery] Failed to add property listener: \(status)")
         }
     }
 
@@ -85,22 +85,7 @@ final class DeviceDiscovery: ObservableObject {
 
         let discovered = deviceIDs.compactMap { buildDevice(from: $0) }
 
-        // Smart merge: preserve existing entries where possible to avoid UI flicker
-        if devices.isEmpty {
-            devices = discovered
-        } else {
-            var updated: [AudioOutputDevice] = []
-            // Update existing and add new
-            for newDev in discovered {
-                if devices.contains(where: { $0.id == newDev.id }) {
-                    // Preserve the device but update mutable fields
-                    updated.append(newDev)
-                } else {
-                    updated.append(newDev)
-                }
-            }
-            devices = updated
-        }
+        devices = discovered
     }
 
     private func getAudioDeviceIDs(_ ids: inout [AudioObjectID]) {
@@ -116,7 +101,7 @@ final class DeviceDiscovery: ObservableObject {
             &addr, 0, nil, &size
         )
         guard status == noErr else {
-            print("[DeviceDiscovery] GetPropertyDataSize failed: \(status)")
+            DLog("[DeviceDiscovery] GetPropertyDataSize failed: \(status)")
             return
         }
 
@@ -129,7 +114,7 @@ final class DeviceDiscovery: ObservableObject {
             &addr, 0, nil, &size, &deviceIDs
         )
         guard status == noErr else {
-            print("[DeviceDiscovery] GetPropertyData failed: \(status)")
+            DLog("[DeviceDiscovery] GetPropertyData failed: \(status)")
             return
         }
         ids = deviceIDs

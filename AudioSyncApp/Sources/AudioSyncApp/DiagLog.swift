@@ -9,9 +9,6 @@ final class DiagLog {
     private let logURL: URL
     private let queue = DispatchQueue(label: "com.audiosync.diaglog", qos: .utility)
     private var handle: FileHandle?
-    /// Newline byte (0x0A) for appending to log lines
-    private let newlineByte: UInt8 = 0x0A
-
     private init() {
         let dir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs", isDirectory: true)
@@ -29,7 +26,7 @@ final class DiagLog {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
             var data = message.data(using: .utf8) ?? Data()
-            data.append(self.newlineByte)
+            data.append(UInt8(0x0A))
             handle.write(data)
         }
     }
@@ -39,7 +36,7 @@ final class DiagLog {
         queue.sync { [weak self] in
             guard let self, let handle = self.handle else { return }
             var data = message.data(using: .utf8) ?? Data()
-            data.append(self.newlineByte)
+            data.append(UInt8(0x0A))
             handle.write(data)
         }
     }

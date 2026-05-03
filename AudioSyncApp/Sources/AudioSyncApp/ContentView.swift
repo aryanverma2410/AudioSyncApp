@@ -513,14 +513,14 @@ struct DeviceControlCard: View {
                         get: { Double(settings.delayMs) },
                         set: { appState.updateDelay(device.uid, ms: Float($0)) }
                     ),
-                    in: 0...1000,
+                    in: 0...Double(DeviceSettings.maxDelayMs),
                     step: 5
                 )
                 .tint(.accentColor)
 
                 TextField("ms", value: Binding(
                     get: { Double(settings.delayMs) },
-                    set: { appState.updateDelay(device.uid, ms: Float(min(max($0, 0), 1000))) }
+                    set: { appState.updateDelay(device.uid, ms: Float(min(max($0, 0), Double(DeviceSettings.maxDelayMs)))) }
                 ), format: .number.precision(.fractionLength(0)))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 48)

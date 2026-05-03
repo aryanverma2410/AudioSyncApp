@@ -4,14 +4,31 @@ import CoreAudio
 import AudioToolbox
 import Darwin
 
+// MARK: - Audio Constants
+
+private let kEngineSampleRate: Double = 48000
+private let kEngineChannels: UInt32 = 2
+private let kSafetyFrames: Int = 4096        // ~85ms at 48kHz — BT codec headroom
+private let kRingBufferPower: Int = 19       // 2^19 = 524288 frames ≈ 10.9s at 48kHz
+private let kMaxDelayMs: Float = 1000
+
 // MARK: - Atomic Float (for diagnostics)
 
 /// Simple atomic Float for lock-free cross-thread reads of tap peak level.
 final class AtomicFloat: @unchecked Sendable {
     private var _value: Float
+    private var _lock = os_unfair_lock_s()
     init(_ v: Float = 0) { _value = v }
-    func store(_ v: Float) { _value = v }
-    func load() -> Float { _value }
+    func store(_ v: Float) {
+        os_unfair_lock_lock(&_lock)
+        _value = v
+        os_unfair_lock_unlock(&_lock)
+    }
+    func load() -> Float {
+        os_unfair_lock_lock(&_lock)
+        defer { os_unfair_lock_unlock(&_lock) }
+        return _value
+    }
 }
 
 // MARK: - Thread-Safe Lookup
@@ -74,14 +91,14 @@ final class DelayedRingBuffer: @unchecked Sendable {
     private var _delayFrames: Int = 0
 
     // Safety margin: minimum distance between write and read (prevents underrun on BT)
-    // BT codecs add 100-200ms latency; 4096 frames ≈ 85ms at 48kHz gives enough headroom.
-    private let safetyFrames: Int = 4096
+    // BT codecs add 100-200ms latency; kSafetyFrames ≈ 85ms at 48kHz gives enough headroom.
+    private let safetyFrames: Int = kSafetyFrames
 
     private(set) var _writeCount: Int = 0
     private(set) var _readCount: Int = 0
     private(set) var _lastABLCount: Int = 0
 
-    init(capacitySeconds: Double = 4.0, sampleRate: Double = 48000) {
+    init(capacitySeconds: Double = 4.0, sampleRate: Double = kEngineSampleRate) {
         // Round up to next power of 2 for fast modulo
         let rawFrames = Int(capacitySeconds * sampleRate)
         var n = 1
@@ -244,7 +261,7 @@ final class MultiOutputEngine: ObservableObject {
 
     private var deviceOutputs: [String: DeviceOutput] = [:]
 
-    private let engineFormat: AVAudioFormat = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!
+    private let engineFormat: AVAudioFormat = AVAudioFormat(standardFormatWithSampleRate: kEngineSampleRate, channels: 2)!
     private var cpuTimer: Timer?
 
     // MARK: - Device Output
@@ -708,7 +725,7 @@ final class MultiOutputEngine: ObservableObject {
         // The previous crash was from the refCon parameter order bug (now fixed),
         // NOT from setting this format.
         var inputASBD = AudioStreamBasicDescription(
-            mSampleRate: 48000,
+            mSampleRate: kEngineSampleRate,
             mFormatID: kAudioFormatLinearPCM,
             mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsNonInterleaved | kAudioFormatFlagIsPacked,
             mBytesPerPacket: 4,
