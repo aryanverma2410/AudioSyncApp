@@ -6,170 +6,225 @@ struct ContentView: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        HStack(spacing: 0) {
-            // ── Sidebar ──
-            sidebar
-                .frame(width: 240)
-                .background(Color(nsColor: .windowBackgroundColor))
-
+        VStack(spacing: 0) {
+            toolbar
             Divider()
-
-            // ── Main Content ──
             mainContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    // MARK: - Sidebar
+    // MARK: - Toolbar
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // App header
-            HStack(spacing: 10) {
+    private var toolbar: some View {
+        HStack(spacing: 16) {
+            // App identity
+            HStack(spacing: 8) {
                 Image(systemName: "waveform.circle.fill")
-                    .font(.title2)
+                    .font(.title3)
                     .foregroundColor(.accentColor)
                 Text("AudioSync")
                     .font(.headline)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
 
-            // Status indicator
-            HStack(spacing: 8) {
+            Separator()
+
+            // Status pill
+            HStack(spacing: 6) {
                 Circle()
                     .fill(appState.isActive ? Color.green : Color.gray)
-                    .frame(width: 8, height: 8)
-                Text(appState.isActive ? "Routing Active" : "Inactive")
+                    .frame(width: 7, height: 7)
+                Text(appState.isActive ? "Routing" : "Off")
                     .font(.caption)
-                    .foregroundColor(.secondary)
-                if appState.isActive {
-                    Label {
-                        Text("Capture: \(appState.systemCapturer.captureMethod.rawValue)")
-                    } icon: {
-                        Image(systemName: appState.systemCapturer.captureMethod == .coreAudio ? "hifispeaker.and.signal" : "capture.viewfinder")
-                            .foregroundColor(appState.systemCapturer.captureMethod == .coreAudio ? .green : .orange)
-                            .font(.caption2)
-                    }
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                }
-                Spacer()
-                if appState.isActive {
-                    Text("\(appState.outputEngine.activeDeviceCount) device\(appState.outputEngine.activeDeviceCount == 1 ? "" : "s")")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.accentColor.opacity(0.1))
-                        .cornerRadius(4)
-                }
+                    .fontWeight(.semibold)
+                    .foregroundColor(appState.isActive ? .green : .secondary)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(appState.isActive ? Color.green.opacity(0.1) : Color.gray.opacity(0.08))
+            )
 
-            Divider()
+            if appState.isActive {
+                HStack(spacing: 4) {
+                    Image(systemName: "hifispeaker.and.signal")
+                        .font(.caption2)
+                    Text("\(appState.outputEngine.activeDeviceCount) active")
+                        .font(.caption2)
+                }
+                .foregroundColor(.secondary)
+
+                HStack(spacing: 4) {
+                    Image(systemName: appState.systemCapturer.captureMethod == .coreAudio ? "hifispeaker.and.signal" : "capture.viewfinder")
+                        .font(.caption2)
+                    Text(appState.systemCapturer.captureMethod.rawValue)
+                        .font(.caption2)
+                }
+                .foregroundColor(appState.systemCapturer.captureMethod == .coreAudio ? .green : .orange)
+            }
 
             Spacer()
 
-            // Bottom controls
-            VStack(spacing: 12) {
-                Divider()
-                    .padding(.horizontal, 16)
-
-                // Master toggle
-                Button {
-                    if appState.isActive {
-                        appState.stop()
-                    } else {
-                        Task { await appState.start() }
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: appState.isActive ? "stop.circle.fill" : "play.circle.fill")
-                            .font(.title3)
-                        Text(appState.isActive ? "Stop Routing" : "Start Routing")
-                            .fontWeight(.medium)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(appState.isActive ? Color.red.opacity(0.1) : Color.accentColor.opacity(0.1))
-                    .foregroundColor(appState.isActive ? .red : .accentColor)
-                    .cornerRadius(8)
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 16)
-
-                // Test All Speakers button
-                Button {
-                    appState.testToneAll()
-                } label: {
-                    HStack {
-                        Image(systemName: "speaker.wave.2.fill")
-                            .font(.title3)
-                        Text("Test All Speakers")
-                            .fontWeight(.medium)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(Color.orange.opacity(0.1))
-                    .foregroundColor(.orange)
-                    .cornerRadius(8)
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 16)
-                .padding(.bottom, appState.isActive ? 0 : 16)
-
-                // Restart Sync button
-                if appState.isActive {
-                    Button {
-                        Task { await appState.restartRouting() }
-                    } label: {
-                        HStack {
-                            Image(systemName: "arrow.clockwise.2.circlepath")
-                                .font(.title3)
-                            Text("Restart Sync")
-                                .fontWeight(.medium)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color.purple.opacity(0.1))
-                        .foregroundColor(.purple)
-                        .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
-                }
+            // Action buttons
+            Button {
+                appState.testToneAll()
+            } label: {
+                Label("Test All", systemImage: "speaker.wave.2.fill")
+                    .font(.caption)
             }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!appState.isActive)
+
+            Button {
+                let result = appState.autoDelayCompensate()
+                for (uid, delayMs) in result {
+                    appState.updateDelay(uid, ms: delayMs)
+                }
+            } label: {
+                Label("Auto Sync", systemImage: "clock.arrow.circlepath")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(!appState.isActive)
+            .help("Measure latency and auto-compensate delays so all speakers sync")
+
+            Button {
+                appState.deviceDiscovery.refreshDevices()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Refresh device list")
+
+            Separator()
+
+            // Master routing toggle
+            Button {
+                if appState.isActive {
+                    appState.stop()
+                } else {
+                    Task { await appState.start() }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: appState.isActive ? "stop.fill" : "play.fill")
+                    Text(appState.isActive ? "Stop" : "Start")
+                        .fontWeight(.semibold)
+                }
+                .font(.callout)
+                .frame(width: 72, height: 28)
+                .background(appState.isActive ? Color.red : Color.accentColor)
+                .foregroundColor(.white)
+                .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    // MARK: - Separator
+
+    private func Separator() -> some View {
+        RoundedRectangle(cornerRadius: 0.5)
+            .fill(Color.gray.opacity(0.3))
+            .frame(width: 1, height: 20)
     }
 
     // MARK: - Main Content
 
     private var mainContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Error banner
-                if let error = appState.errorMessage {
-                    errorBanner(error)
+        ZStack {
+            Color(nsColor: .controlBackgroundColor)
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Errors
+                    if let error = appState.errorMessage {
+                        errorBanner(error)
+                    }
+                    if let captureError = appState.systemCapturer.captureError {
+                        captureErrorBanner(captureError)
+                    }
+
+                    // Restart bar (only when active)
+                    if appState.isActive {
+                        restartBar
+                    }
+
+                    // Device grid
+                    if appState.deviceDiscovery.devices.isEmpty {
+                        emptyStateView
+                    } else {
+                        deviceGrid
+                    }
                 }
-
-                // Capture error
-                if let captureError = appState.systemCapturer.captureError {
-                    captureErrorBanner(captureError)
-                }
-
-                // Header
-                headerSection
-
-                // Device list
-                devicesSection
+                .padding(20)
             }
-            .padding(24)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    // MARK: - Restart Bar
+
+    private var restartBar: some View {
+        HStack {
+            Image(systemName: "info.circle")
+                .foregroundColor(.secondary)
+            Text("New speakers auto-join when connected.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Spacer()
+            Button {
+                Task { await appState.restartRouting() }
+            } label: {
+                Label("Restart Sync", systemImage: "arrow.clockwise.2.circlepath")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.05))
+        .cornerRadius(8)
+    }
+
+    // MARK: - Device Grid
+
+    private var deviceGrid: some View {
+        LazyVGrid(columns: [
+            GridItem(.flexible(minimum: 280), spacing: 12),
+            GridItem(.flexible(minimum: 280), spacing: 12),
+        ], alignment: .leading, spacing: 12) {
+            ForEach(orderedDevices) { device in
+                DeviceControlCard(device: device)
+                    .environmentObject(appState)
+            }
+        }
+    }
+
+    /// Devices sorted by user's drag-reorder preference
+    private var orderedDevices: [AudioOutputDevice] {
+        let devices = appState.deviceDiscovery.devices
+        let order = appState.deviceOrder
+        if order.isEmpty { return devices }
+
+        var result: [AudioOutputDevice] = []
+        for uid in order {
+            if let device = devices.first(where: { $0.uid == uid }) {
+                result.append(device)
+            }
+        }
+        for device in devices where !order.contains(device.uid) {
+            result.append(device)
+        }
+        return result
     }
 
     // MARK: - Error Banners
@@ -207,145 +262,24 @@ struct ContentView: View {
         .cornerRadius(8)
     }
 
-    // MARK: - Header
-
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Output Devices")
-                .font(.title2)
-                .fontWeight(.bold)
-
-            HStack(spacing: 16) {
-                Label {
-                    Text("\(appState.deviceDiscovery.devices.count) detected")
-                } icon: {
-                    Image(systemName: "hifispeaker.and.signal")
-                        .foregroundColor(.accentColor)
-                }
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-
-                if appState.outputEngine.isRunning {
-                    Label {
-                        Text("Engine running")
-                    } icon: {
-                        Image(systemName: "circle.fill")
-                            .foregroundColor(.green)
-                            .font(.caption2)
-                    }
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                }
-
-                if appState.isActive {
-                    Label {
-                        Text("Capture: \(appState.systemCapturer.captureMethod.rawValue)")
-                    } icon: {
-                        Image(systemName: appState.systemCapturer.captureMethod == .coreAudio ? "hifispeaker.and.signal" : "capture.viewfinder")
-                            .foregroundColor(appState.systemCapturer.captureMethod == .coreAudio ? .green : .orange)
-                            .font(.caption2)
-                    }
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                }
-
-                if appState.outputEngine.activeDeviceCount > 0 {
-                    Label {
-                        Text("\(appState.outputEngine.activeDeviceCount) active")
-                    } icon: {
-                        Image(systemName: "speaker.wave.2")
-                            .foregroundColor(.accentColor)
-                    }
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                if appState.isActive {
-                    Button {
-                        let result = appState.autoDelayCompensate()
-                        for (uid, delayMs) in result {
-                            appState.updateDelay(uid, ms: delayMs)
-                        }
-                    } label: {
-                        Label("Auto Sync", systemImage: "clock.arrow.circlepath")
-                            .font(.subheadline)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Measure latency and auto-compensate delays so all speakers sync")
-                }
-
-                Button {
-                    appState.deviceDiscovery.refreshDevices()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                        .font(.subheadline)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-    }
-
-    // MARK: - Devices Section
-
-    private var devicesSection: some View {
-        Group {
-            if appState.deviceDiscovery.devices.isEmpty {
-                emptyStateView
-            } else {
-                LazyVStack(spacing: 12) {
-                    ForEach(orderedDevices) { device in
-                        DeviceControlCard(device: device)
-                            .environmentObject(appState)
-                    }
-                    .onMove { source, destination in
-                        appState.moveDevice(from: source, to: destination)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Devices sorted by user's drag-reorder preference
-    private var orderedDevices: [AudioOutputDevice] {
-        let devices = appState.deviceDiscovery.devices
-        let order = appState.deviceOrder
-        if order.isEmpty { return devices }
-
-        var result: [AudioOutputDevice] = []
-        for uid in order {
-            if let device = devices.first(where: { $0.uid == uid }) {
-                result.append(device)
-            }
-        }
-        for device in devices where !order.contains(device.uid) {
-            result.append(device)
-        }
-        return result
-    }
-
     // MARK: - Empty State
 
     private var emptyStateView: some View {
-        VStack(spacing: 16) {
-            Spacer()
-                .frame(height: 40)
-
+        VStack(spacing: 20) {
+            Spacer().frame(height: 60)
             Image(systemName: "hifispeaker")
-                .font(.system(size: 48))
-                .foregroundColor(.secondary.opacity(0.5))
+                .font(.system(size: 56))
+                .foregroundStyle(.secondary.opacity(0.4))
 
-            Text("No Output Devices Found")
-                .font(.title3)
-                .fontWeight(.semibold)
-
-            Text("Connect a speaker, headphones, or Bluetooth device\nto begin routing audio.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+            VStack(spacing: 6) {
+                Text("No Output Devices Found")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                Text("Connect a speaker, headphones, or Bluetooth device\nto begin routing audio.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
 
             Button {
                 appState.deviceDiscovery.refreshDevices()
@@ -366,7 +300,6 @@ struct ContentView: View {
 struct DeviceControlCard: View {
     let device: AudioOutputDevice
     @EnvironmentObject var appState: AppState
-    @State private var isExpanded = true
 
     private var settings: DeviceSettings {
         appState.deviceSettings[device.uid] ?? (device.transportType.isBluetooth ? .defaultBluetooth : DeviceSettings())
@@ -374,157 +307,138 @@ struct DeviceControlCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header row
-            HStack(spacing: 12) {
-                // Device icon
+            // ── Card Header ──
+            cardHeader
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+                .padding(.bottom, settings.isEnabled ? 8 : 10)
+
+            // ── Controls (only when enabled) ──
+            if settings.isEnabled {
+                VStack(spacing: 10) {
+                    volumeSection
+                    vuMeter
+                    delaySection
+                    actionBar
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+                .transition(.opacity)
+            }
+        }
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(settings.isEnabled ? device.transportType.color.opacity(0.15) : Color.gray.opacity(0.1), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(settings.isEnabled ? 0.05 : 0.01), radius: 6, y: 2)
+        .opacity(settings.isEnabled ? 1.0 : 0.6)
+    }
+
+    // MARK: - Card Background
+
+    private var cardBackground: some View {
+        ZStack(alignment: .topLeading) {
+            Color(nsColor: .windowBackgroundColor)
+            // Accent stripe at top
+            RoundedRectangle(cornerRadius: 0)
+                .fill(device.transportType.color.opacity(settings.isEnabled ? 0.08 : 0.02))
+                .frame(height: 4)
+        }
+    }
+
+    // MARK: - Card Header
+
+    private var cardHeader: some View {
+        HStack(alignment: .center, spacing: 10) {
+            // Device icon
+            ZStack {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(device.transportType.color.opacity(0.12))
+                    .frame(width: 32, height: 32)
                 Image(systemName: device.transportType.iconName)
-                    .font(.title2)
+                    .font(.callout)
                     .foregroundColor(device.transportType.color)
-                    .frame(width: 32)
+            }
 
-                // Device info
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(device.name)
-                        .font(.headline)
-                        .lineLimit(1)
+            // Device name + badges
+            VStack(alignment: .leading, spacing: 2) {
+                Text(device.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
 
-                    HStack(spacing: 8) {
-                        // Transport type badge
-                        Text(device.transportType.rawValue)
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(device.transportType.color.opacity(0.15))
-                            .cornerRadius(4)
+                HStack(spacing: 5) {
+                    transportBadge
 
-                        // Sample rate
-                        Text("\(Int(device.sampleRate)) Hz")
-                            .font(.caption2)
+                    if device.nominalLatency > 0 {
+                        Text("\(Int(device.nominalLatency))ms")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .foregroundColor(.secondary)
+                    }
 
-                        // Latency
-                        if device.nominalLatency > 0 {
-                            Text("\(Int(device.nominalLatency)) ms latency")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
+                    if device.transportType.isBluetooth {
+                        Text("BT")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(Color.cyan.opacity(0.12))
+                            .cornerRadius(3)
                     }
                 }
-
-                Spacer()
-
-                // Enable toggle
-                Toggle("", isOn: Binding(
-                    get: { settings.isEnabled },
-                    set: { appState.toggleDevice(device.uid, enabled: $0) }
-                ))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .labelsHidden()
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, isExpanded && settings.isEnabled ? 8 : 14)
 
-            // Expanded controls
+            Spacer()
+
+            // Mute toggle
             if settings.isEnabled {
-                VStack(alignment: .leading, spacing: 14) {
-                    Divider()
-                        .padding(.horizontal, 16)
-
-                    // Delay control
-                    delayControl
-
-                    // Volume control
-                    volumeControl
-
-                    // Mute button
-                    muteControl
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 14)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(nsColor: .windowBackgroundColor))
-                .shadow(color: .black.opacity(0.04), radius: 4, x: 0, y: 2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(settings.isEnabled ? device.transportType.color.opacity(0.2) : Color.clear, lineWidth: 1)
-        )
-    }
-
-    // MARK: - Delay Control
-
-    private var delayControl: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Label("Delay", systemImage: "clock.arrow.circlepath")
-                    .font(.subheadline)
-                    .foregroundColor(.primary)
-                Spacer()
-                Text(String(format: "%.0f ms", Double(settings.delayMs)))
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundColor(.accentColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.1))
-                    .cornerRadius(4)
-            }
-
-            HStack(spacing: 8) {
-                Slider(
-                    value: Binding(
-                        get: { Double(settings.delayMs) },
-                        set: { appState.updateDelay(device.uid, ms: Float($0)) }
-                    ),
-                    in: 0...1000,
-                    step: 5
-                )
-
-                TextField("ms", value: Binding(
-                    get: { Double(settings.delayMs) },
-                    set: { appState.updateDelay(device.uid, ms: Float(min(max($0, 0), 1000))) }
-                ), format: .number.precision(.fractionLength(0)))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 56)
-                    .font(.caption)
-
                 Button {
-                    appState.updateDelay(device.uid, ms: 0)
+                    appState.updateMute(device.uid, isMuted: !settings.isMuted)
                 } label: {
-                    Image(systemName: "arrow.counterclockwise")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                    Image(systemName: settings.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.callout)
+                        .foregroundColor(settings.isMuted ? .red : .secondary)
                 }
-                .buttonStyle(.borderless)
-                .help("Reset delay to 0 ms")
+                .buttonStyle(.plain)
+                .help(settings.isMuted ? "Unmute" : "Mute")
             }
+
+            // Enable toggle
+            Toggle("", isOn: Binding(
+                get: { settings.isEnabled },
+                set: { appState.toggleDevice(device.uid, enabled: $0) }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .labelsHidden()
         }
     }
 
-    // MARK: - Volume Control
+    // MARK: - Transport Badge
 
-    private var volumeControl: some View {
+    private var transportBadge: some View {
+        Text(device.transportType.rawValue)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundColor(device.transportType.color)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(device.transportType.color.opacity(0.1))
+            .cornerRadius(3)
+    }
+
+    // MARK: - Volume Section
+
+    private var volumeSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Label("Volume", systemImage: "speaker.wave.2")
-                    .font(.subheadline)
-                    .foregroundColor(.primary)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
                 Spacer()
                 Text("\(Int(settings.volume * 100))%")
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundColor(.accentColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.1))
-                    .cornerRadius(4)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(settings.isMuted ? .red : .primary)
             }
 
             Slider(
@@ -535,86 +449,122 @@ struct DeviceControlCard: View {
                 in: 0...1,
                 step: 0.01
             )
+            .tint(settings.isMuted ? .red : device.transportType.color)
+        }
+    }
 
-            // VU meter bar (dB scale: -60dB to 0dB)
-            HStack(spacing: 4) {
-                Image(systemName: "waveform")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                GeometryReader { geo in
-                    let level = appState.vuLevels[device.uid] ?? 0
-                    let dbFloor: Float = -60
-                    let linearDb = level > 0 ? 20 * log10(level) : dbFloor
-                    let clampedDb = max(linearDb, dbFloor)
-                    let fraction = CGFloat((clampedDb - dbFloor) / (0 - dbFloor))
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.gray.opacity(0.2))
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(level > 0.9 ? Color.red : level > 0.5 ? Color.orange : Color.green)
-                            .frame(width: geo.size.width * fraction)
-                    }
+    // MARK: - VU Meter
+
+    private var vuMeter: some View {
+        HStack(spacing: 5) {
+            GeometryReader { geo in
+                let level = appState.vuLevels[device.uid] ?? 0
+                let dbFloor: Float = -60
+                let linearDb = level > 0 ? 20 * log10(level) : dbFloor
+                let clampedDb = max(linearDb, dbFloor)
+                let fraction = CGFloat((clampedDb - dbFloor) / (0 - dbFloor))
+
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.gray.opacity(0.12))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .green,
+                                    level > 0.5 ? .yellow : .green,
+                                    level > 0.9 ? .red : .orange
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(geo.size.width * fraction, 0))
                 }
-                .frame(height: 6)
-                let lvl = appState.vuLevels[device.uid] ?? 0
-                let db = lvl > 0 ? 20 * log10(lvl) : -60
-                Text(lvl > 0.001 ? String(format: "%.0fdB", db) : "-∞")
-                    .font(.system(size: 9, design: .monospaced))
+            }
+            .frame(height: 4)
+
+            let lvl = appState.vuLevels[device.uid] ?? 0
+            let db = lvl > 0 ? 20 * log10(lvl) : -60
+            Text(lvl > 0.001 ? String(format: "%+.0fdB", db) : " -∞")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 34, alignment: .trailing)
+        }
+    }
+
+    // MARK: - Delay Section
+
+    private var delaySection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Delay", systemImage: "clock.arrow.circlepath")
+                    .font(.system(size: 11))
                     .foregroundColor(.secondary)
-                    .frame(width: 32, alignment: .trailing)
+                Spacer()
+                Text(String(format: "%.0f ms", Double(settings.delayMs)))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(settings.delayMs > 0 ? .accentColor : .secondary)
+            }
+
+            HStack(spacing: 6) {
+                Slider(
+                    value: Binding(
+                        get: { Double(settings.delayMs) },
+                        set: { appState.updateDelay(device.uid, ms: Float($0)) }
+                    ),
+                    in: 0...1000,
+                    step: 5
+                )
+                .tint(.accentColor)
+
+                TextField("ms", value: Binding(
+                    get: { Double(settings.delayMs) },
+                    set: { appState.updateDelay(device.uid, ms: Float(min(max($0, 0), 1000))) }
+                ), format: .number.precision(.fractionLength(0)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 48)
+                    .font(.system(size: 11, design: .monospaced))
+
+                Button {
+                    appState.updateDelay(device.uid, ms: 0)
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Reset delay to 0ms")
             }
         }
     }
 
-    // MARK: - Mute Control
+    // MARK: - Action Bar
 
-    private var muteControl: some View {
-        HStack {
-            Button {
-                appState.updateMute(device.uid, isMuted: !settings.isMuted)
-            } label: {
-                Label(
-                    settings.isMuted ? "Unmute" : "Mute",
-                    systemImage: settings.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
-                )
-                .font(.subheadline)
-                .foregroundColor(settings.isMuted ? .red : .primary)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-
-            if settings.isMuted {
-                Text("Device is muted")
-                    .font(.caption)
-                    .foregroundColor(.red)
-            }
-
-            Spacer()
-
-            // Auto delay compensation — available for ALL devices
-            Button {
-                let result = appState.autoDelayCompensate()
-                for (uid, delayMs) in result {
-                    appState.updateDelay(uid, ms: delayMs)
-                }
-            } label: {
-                Label("Auto", systemImage: "clock.arrow.circlepath")
-                    .font(.caption2)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Measure latency and auto-set delays so all speakers sync")
-
-            // Test tone button — injects a beep directly into this device's ring buffer
+    private var actionBar: some View {
+        HStack(spacing: 8) {
+            // Test tone
             Button {
                 appState.testTone(for: device.uid)
             } label: {
                 Label("Test", systemImage: "waveform.badge.megaphone")
-                    .font(.caption2)
+                    .font(.caption)
             }
             .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Play a test tone to this device")
+            .controlSize(.mini)
+
+            Spacer()
+
+            if settings.isMuted {
+                Text("Muted")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.red)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(4)
+            }
         }
     }
 }
