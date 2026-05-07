@@ -39,7 +39,7 @@ struct ContentView: View {
             // Status indicator
             HStack(spacing: 8) {
                 Circle()
-                    .fill(appState.isActive ? Color.green : Color.red.opacity(0.5))
+                    .fill(appState.isActive ? Color.green : Color.gray)
                     .frame(width: 8, height: 8)
                 Text(appState.isActive ? "Routing Active" : "Inactive")
                     .font(.caption)
@@ -119,7 +119,29 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 16)
-                .padding(.bottom, 16)
+                .padding(.bottom, appState.isActive ? 0 : 16)
+
+                // Restart Sync button
+                if appState.isActive {
+                    Button {
+                        Task { await appState.restartRouting() }
+                    } label: {
+                        HStack {
+                            Image(systemName: "arrow.clockwise.2.circlepath")
+                                .font(.title3)
+                            Text("Restart Sync")
+                                .fontWeight(.medium)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.purple.opacity(0.1))
+                        .foregroundColor(.purple)
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+                }
             }
         }
     }
@@ -275,13 +297,34 @@ struct ContentView: View {
                 emptyStateView
             } else {
                 LazyVStack(spacing: 12) {
-                    ForEach(appState.deviceDiscovery.devices) { device in
+                    ForEach(orderedDevices) { device in
                         DeviceControlCard(device: device)
                             .environmentObject(appState)
+                    }
+                    .onMove { source, destination in
+                        appState.moveDevice(from: source, to: destination)
                     }
                 }
             }
         }
+    }
+
+    /// Devices sorted by user's drag-reorder preference
+    private var orderedDevices: [AudioOutputDevice] {
+        let devices = appState.deviceDiscovery.devices
+        let order = appState.deviceOrder
+        if order.isEmpty { return devices }
+
+        var result: [AudioOutputDevice] = []
+        for uid in order {
+            if let device = devices.first(where: { $0.uid == uid }) {
+                result.append(device)
+            }
+        }
+        for device in devices where !order.contains(device.uid) {
+            result.append(device)
+        }
+        return result
     }
 
     // MARK: - Empty State
@@ -493,22 +536,32 @@ struct DeviceControlCard: View {
                 step: 0.01
             )
 
-            // VU meter bar
+            // VU meter bar (dB scale: -60dB to 0dB)
             HStack(spacing: 4) {
                 Image(systemName: "waveform")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                 GeometryReader { geo in
                     let level = appState.vuLevels[device.uid] ?? 0
+                    let dbFloor: Float = -60
+                    let linearDb = level > 0 ? 20 * log10(level) : dbFloor
+                    let clampedDb = max(linearDb, dbFloor)
+                    let fraction = CGFloat((clampedDb - dbFloor) / (0 - dbFloor))
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(Color.gray.opacity(0.2))
                         RoundedRectangle(cornerRadius: 2)
                             .fill(level > 0.9 ? Color.red : level > 0.5 ? Color.orange : Color.green)
-                            .frame(width: geo.size.width * CGFloat(min(level, 1.0)))
+                            .frame(width: geo.size.width * fraction)
                     }
                 }
                 .frame(height: 6)
+                let lvl = appState.vuLevels[device.uid] ?? 0
+                let db = lvl > 0 ? 20 * log10(lvl) : -60
+                Text(lvl > 0.001 ? String(format: "%.0fdB", db) : "-∞")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(width: 32, alignment: .trailing)
             }
         }
     }

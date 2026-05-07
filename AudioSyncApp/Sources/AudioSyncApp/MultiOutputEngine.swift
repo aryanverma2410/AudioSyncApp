@@ -540,37 +540,61 @@ final class MultiOutputEngine: ObservableObject {
 
     // MARK: - Auto-Delay Compensation
 
-    /// Measure per-device latency by comparing read/write positions in ring buffers.
-    /// Returns ms behind writer for each device UID.
+    /// Measure per-device latency by sampling ring buffer positions multiple times.
+    /// Only includes devices whose UIDs are in `enabledUIDs`.
+    /// Returns ms behind writer for each device UID, averaged over `sampleCount` readings.
     @MainActor
-    func measureLatencies() -> [String: Float] {
+    func measureLatencies(enabledUIDs: Set<String>, sampleCount: Int = 5) -> [String: Float] {
+        var samples: [String: [Float]] = [:]
+        for uid in enabledUIDs {
+            samples[uid] = []
+        }
+        
+        // Take multiple samples with small delays between them
+        for i in 0..<sampleCount {
+            for uid in enabledUIDs {
+                guard let output = deviceOutputs[uid] else { continue }
+                let wp = output.buffer.currentWritePos
+                let rp = output.buffer.currentReadPos
+                let framesBehind = max(wp - rp, 0)
+                let msBehind = Float(Double(framesBehind) / engineFormat.sampleRate * 1000.0)
+                samples[uid]?.append(msBehind)
+            }
+            if i < sampleCount - 1 {
+                usleep(100_000) // 100ms between samples
+            }
+        }
+        
+        // Average the samples
         var latencies: [String: Float] = [:]
-        for (uid, output) in deviceOutputs {
-            let wp = output.buffer.currentWritePos
-            let rp = output.buffer.currentReadPos
-            let framesBehind = max(wp - rp, 0)
-            let msBehind = Float(Double(framesBehind) / engineFormat.sampleRate * 1000.0)
-            latencies[uid] = msBehind
-            DLog("[AutoDelay] '\(output.device.name)': \(String(format: "%.1f", msBehind))ms behind (\(framesBehind) frames)")
+        for (uid, vals) in samples where !vals.isEmpty {
+            let avg = vals.reduce(0, +) / Float(vals.count)
+            latencies[uid] = avg
+            if let output = deviceOutputs[uid] {
+                DLog("[AutoDelay] '\(output.device.name)': avg \(String(format: "%.1f", avg))ms behind (samples: \(vals.map { String(format: "%.0f", $0) }.joined(separator: ", ")))")
+            }
         }
         return latencies
     }
 
     /// Apply auto-delay compensation: most-delayed speaker = 0ms, others offset upward.
+    /// Only considers devices in `enabledUIDs`.
     /// Returns the applied delays keyed by device UID.
     @MainActor
-    func applyAutoDelayCompensation() -> [String: Float] {
-        let latencies = measureLatencies()
+    func applyAutoDelayCompensation(enabledUIDs: Set<String>) -> [String: Float] {
+        let latencies = measureLatencies(enabledUIDs: enabledUIDs)
         guard !latencies.isEmpty else { return [:] }
         let maxLatency = latencies.values.max() ?? 0
 
         var compensated: [String: Float] = [:]
         for (uid, latency) in latencies {
             let offset = max(maxLatency - latency, 0)
-            compensated[uid] = offset
+            // Round to nearest 5ms for cleaner display
+            let rounded = round(offset / 5.0) * 5.0
+            compensated[uid] = rounded
             if let output = deviceOutputs[uid] {
-                output.buffer.setDelay(ms: offset, sampleRate: engineFormat.sampleRate)
-                DLog("[AutoDelay] '\(output.device.name)' → \(String(format: "%.0f", offset))ms (was \(String(format: "%.1f", latency))ms behind)")
+                output.buffer.setDelay(ms: rounded, sampleRate: engineFormat.sampleRate)
+                DLog("[AutoDelay] '\(output.device.name)' → \(String(format: "%.0f", rounded))ms (was \(String(format: "%.1f", latency))ms behind)")
             }
         }
         return compensated
@@ -610,6 +634,17 @@ final class MultiOutputEngine: ObservableObject {
         )
         deviceOutputs[device.uid] = output
         activeDeviceCount = deviceOutputs.count
+
+        // If engine is already running, start the HAL unit immediately
+        // (otherwise start() will start it when called)
+        if isRunning {
+            let status = AudioOutputUnitStart(halUnit)
+            if status != noErr {
+                DLog("addDevice: AudioOutputUnitStart failed for '\(device.name)' (status \(status))")
+            } else {
+                DLog("addDevice: Started HAL unit for '\(device.name)' (engine already running)")
+            }
+        }
     }
 
     func removeDevice(_ deviceUID: String) {

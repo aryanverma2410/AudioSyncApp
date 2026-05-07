@@ -17,6 +17,7 @@ class AppState: ObservableObject {
     @Published var deviceSettings: [String: DeviceSettings] = [:]  // keyed by device UID
     @Published var errorMessage: String?
     @Published var vuLevels: [String: Float] = [:]  // Per-device VU level (refreshed by timer)
+    @Published var deviceOrder: [String] = []  // Device UIDs in display order
 
     // Stored so AudioObjectAddPropertyListener callback pointer remains valid
     private var deviceChangeAddr = AudioObjectPropertyAddress(
@@ -164,6 +165,11 @@ class AppState: ObservableObject {
             return
         }
 
+        // Initialize device order from discovered devices
+        if deviceOrder.isEmpty {
+            deviceOrder = deviceDiscovery.devices.map { $0.uid }
+        }
+
         isActive = true
         startVUTimer()
         DLog("Routing started successfully!")
@@ -250,14 +256,29 @@ class AppState: ObservableObject {
         outputEngine.injectTestToneAll()
     }
 
+    func moveDevice(from source: IndexSet, to destination: Int) {
+        deviceOrder.move(fromOffsets: source, toOffset: destination)
+    }
+
+    /// Restart routing to pick up any devices that weren't properly added.
+    func restartRouting() async {
+        guard isActive else { return }
+        DLog("[AppState] Restarting routing for device sync...")
+        stop()
+        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s settle
+        await start()
+    }
+
     // MARK: - Auto-Delay Compensation
 
-    /// Measure latencies and apply auto-delay compensation.
-    /// Most-delayed speaker = 0ms, others offset. Returns applied delays.
     @MainActor
     func autoDelayCompensate() -> [String: Float] {
-        let compensated = outputEngine.applyAutoDelayCompensation()
-        // Update deviceSettings to reflect the new delays
+        // Only include enabled, non-virtual devices in auto-delay measurement
+        let enabledUIDs = Set(
+            deviceSettings.filter { _, s in s.isEnabled }
+                .map { uid, _ in uid }
+        )
+        let compensated = outputEngine.applyAutoDelayCompensation(enabledUIDs: enabledUIDs)
         for (uid, delayMs) in compensated {
             deviceSettings[uid]?.delayMs = delayMs
         }
