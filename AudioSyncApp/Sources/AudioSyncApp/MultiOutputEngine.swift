@@ -459,27 +459,54 @@ final class MultiOutputEngine: ObservableObject {
         }
     }
 
-    /// Generate 0.3s of 440Hz sine wave and write it to a ring buffer.
     private func writeBeep(to buffer: DelayedRingBuffer, sampleRate: Double) {
-        let frameCount: AVAudioFrameCount = AVAudioFrameCount(sampleRate * 0.3)  // 0.3 second beep
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: engineFormat, frameCapacity: frameCount) else { return }
-        pcmBuffer.frameLength = frameCount
-
-        let freq = 440.0
-        for frame in 0..<Int(frameCount) {
-            // Fade in/out over 10ms to avoid clicks
-            let fadeFrames = Int(sampleRate * 0.01)
-            var envelope: Float = 1.0
-            if frame < fadeFrames { envelope = Float(frame) / Float(fadeFrames) }
-            else if frame > Int(frameCount) - fadeFrames { envelope = Float(Int(frameCount) - frame) / Float(fadeFrames) }
-
-            let value = Float(sin(2.0 * .pi * freq * Double(frame) / sampleRate) * 0.5) * envelope
+        let toneDuration = 0.08   // 80ms per tone
+        let gapDuration = 0.04    // 40ms gap
+        let totalDuration = toneDuration * 2 + gapDuration
+        let totalFrames = AVAudioFrameCount(sampleRate * totalDuration)
+        
+        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: engineFormat, frameCapacity: totalFrames) else { return }
+        pcmBuffer.frameLength = totalFrames
+        
+        let tone1End = Int(sampleRate * toneDuration)
+        let gapEnd = Int(sampleRate * (toneDuration + gapDuration))
+        
+        for frame in 0..<Int(totalFrames) {
+            var value: Float = 0
+            
+            if frame < tone1End {
+                // First tone: 880Hz
+                let envelope = cosineEnvelope(frame: frame, totalFrames: tone1End, sampleRate: sampleRate)
+                value = Float(sin(2.0 * .pi * 880.0 * Double(frame) / sampleRate) * 0.8) * envelope
+            } else if frame < gapEnd {
+                // Gap: silence
+                value = 0
+            } else {
+                // Second tone: 1320Hz
+                let secondFrame = frame - gapEnd
+                let secondTotal = Int(totalFrames) - gapEnd
+                let envelope = cosineEnvelope(frame: secondFrame, totalFrames: secondTotal, sampleRate: sampleRate)
+                value = Float(sin(2.0 * .pi * 1320.0 * Double(frame) / sampleRate) * 0.8) * envelope
+            }
+            
             pcmBuffer.floatChannelData?[0][frame] = value
             pcmBuffer.floatChannelData?[1][frame] = value
         }
+        
+        buffer.write(pcmBuffer)
+    }
 
-        // Write enough copies to fill 1 second of ring buffer
-        for _ in 0..<4 { buffer.write(pcmBuffer) }
+    /// Smooth cosine-half-window envelope for pleasant beep (no clicks).
+    private func cosineEnvelope(frame: Int, totalFrames: Int, sampleRate: Double) -> Float {
+        let fadeFrames = min(Int(sampleRate * 0.01), totalFrames / 4)  // 10ms or 1/4 of tone
+        if frame < fadeFrames {
+            let t = Float(frame) / Float(fadeFrames)
+            return 0.5 - 0.5 * cos(.pi * t)  // Smooth cosine rise
+        } else if frame > totalFrames - fadeFrames {
+            let t = Float(totalFrames - frame) / Float(fadeFrames)
+            return 0.5 - 0.5 * cos(.pi * t)  // Smooth cosine fall
+        }
+        return 1.0
     }
 
     /// Latest peak level from audio capture (for diagnostics)
@@ -728,20 +755,36 @@ final class MultiOutputEngine: ObservableObject {
     /// macOS's dedicated alert sound path, not through BlackHole.
     private static func setDeviceVolumeMax(_ deviceID: AudioObjectID) {
         for ch in [0, 1] {
-            // Try kAudioDevicePropertyVolumeScalar (modern, but unsupported on some BT devices)
+            // Try kAudioDevicePropertyVolumeScalar (direct channel volume — works on wired/built-in)
             var addr = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyVolumeScalar,
                 mScope: kAudioDevicePropertyScopeOutput,
                 mElement: UInt32(ch))
             var vol: Float = 1.0
-            var size = UInt32(MemoryLayout<Float>.size)
+            let size = UInt32(MemoryLayout<Float>.size)
             var writable: DarwinBoolean = false
             let canSet = AudioObjectIsPropertySettable(deviceID, &addr, &writable)
             if canSet == noErr && writable.boolValue {
                 let status = AudioObjectSetPropertyData(deviceID, &addr, 0, nil, size, &vol)
                 if status == noErr {
-                    DLog("Set device \(deviceID) ch\(ch) volume to max")
+                    DLog("Set device \(deviceID) ch\(ch) volume to max (VolumeScalar)")
                 }
+            }
+        }
+        
+        // Fallback for BT: use VirtualMasterVolume (controls macOS volume slider)
+        var vmAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var vmVol: Float = 1.0
+        let vmSize = UInt32(MemoryLayout<Float>.size)
+        var vmWritable: DarwinBoolean = false
+        let vmCanSet = AudioObjectIsPropertySettable(deviceID, &vmAddr, &vmWritable)
+        if vmCanSet == noErr && vmWritable.boolValue {
+            let status = AudioObjectSetPropertyData(deviceID, &vmAddr, 0, nil, vmSize, &vmVol)
+            if status == noErr {
+                DLog("Set device \(deviceID) VirtualMasterVolume to max")
             }
         }
     }

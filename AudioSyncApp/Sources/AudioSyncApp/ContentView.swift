@@ -4,9 +4,6 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
-    @State private var showProfileSheet = false
-    @State private var showNewProfileAlert = false
-    @State private var newProfileName = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -74,38 +71,6 @@ struct ContentView: View {
 
             Divider()
 
-            // Profiles section
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("PROFILES")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .tracking(0.5)
-                    Spacer()
-                    Button {
-                        showNewProfileAlert = true
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.secondary)
-                }
-
-                if appState.profileManager.profiles.isEmpty {
-                    Text("No profiles yet")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.vertical, 4)
-                } else {
-                    ForEach(appState.profileManager.profiles) { profile in
-                        profileRow(profile)
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-
             Spacer()
 
             // Bottom controls
@@ -157,47 +122,6 @@ struct ContentView: View {
                 .padding(.bottom, 16)
             }
         }
-        .alert("New Profile", isPresented: $showNewProfileAlert) {
-            TextField("Profile name", text: $newProfileName)
-            Button("Create") {
-                if !newProfileName.isEmpty {
-                    _ = appState.profileManager.createProfile(named: newProfileName)
-                }
-                newProfileName = ""
-            }
-            Button("Cancel", role: .cancel) {
-                newProfileName = ""
-            }
-        } message: {
-            Text("Enter a name for the new audio profile.")
-        }
-    }
-
-    private func profileRow(_ profile: AudioProfile) -> some View {
-        let isSelected = appState.profileManager.selectedProfile?.id == profile.id
-        return Button {
-            appState.applyProfile(profile)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "bookmark.fill")
-                    .font(.caption)
-                    .foregroundColor(isSelected ? .accentColor : .secondary)
-                Text(profile.name)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                Spacer()
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.caption2)
-                        .foregroundColor(.accentColor)
-                }
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .background(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
-            .cornerRadius(6)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Main Content
@@ -315,6 +239,21 @@ struct ContentView: View {
                 }
 
                 Spacer()
+
+                if appState.isActive {
+                    Button {
+                        let result = appState.autoDelayCompensate()
+                        for (uid, delayMs) in result {
+                            appState.updateDelay(uid, ms: delayMs)
+                        }
+                    } label: {
+                        Label("Auto Sync", systemImage: "clock.arrow.circlepath")
+                            .font(.subheadline)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Measure latency and auto-compensate delays so all speakers sync")
+                }
 
                 Button {
                     appState.deviceDiscovery.refreshDevices()
@@ -599,7 +538,21 @@ struct DeviceControlCard: View {
 
             Spacer()
 
-            // Test tone button — injects a 440Hz beep directly into this device's ring buffer
+            // Auto delay compensation — available for ALL devices
+            Button {
+                let result = appState.autoDelayCompensate()
+                for (uid, delayMs) in result {
+                    appState.updateDelay(uid, ms: delayMs)
+                }
+            } label: {
+                Label("Auto", systemImage: "clock.arrow.circlepath")
+                    .font(.caption2)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Measure latency and auto-set delays so all speakers sync")
+
+            // Test tone button — injects a beep directly into this device's ring buffer
             Button {
                 appState.testTone(for: device.uid)
             } label: {
@@ -609,38 +562,6 @@ struct DeviceControlCard: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .help("Play a test tone to this device")
-
-            // Quick presets for Bluetooth
-            if device.transportType.isBluetooth {
-                HStack(spacing: 4) {
-                    Text("Presets:")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Button("0ms") { appState.updateDelay(device.uid, ms: 0) }
-                        .font(.caption2)
-                        .buttonStyle(.borderless)
-                    Button("150ms") { appState.updateDelay(device.uid, ms: 150) }
-                        .font(.caption2)
-                        .buttonStyle(.borderless)
-                    Button("300ms") { appState.updateDelay(device.uid, ms: 300) }
-                        .font(.caption2)
-                        .buttonStyle(.borderless)
-                    Button("500ms") { appState.updateDelay(device.uid, ms: 500) }
-                        .font(.caption2)
-                        .buttonStyle(.borderless)
-                    Button("Auto") {
-                        let result = appState.autoDelayCompensate()
-                        // Update each device's settings from the result
-                        for (uid, delayMs) in result {
-                            appState.updateDelay(uid, ms: delayMs)
-                        }
-                    }
-                    .font(.caption2)
-                    .buttonStyle(.borderless)
-                    .foregroundColor(.blue)
-                    .help("Measure latency and auto-set delays so all speakers sync")
-                }
-            }
         }
     }
 }

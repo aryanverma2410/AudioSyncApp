@@ -99,4 +99,5 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 extension Notification.Name {
     static let startRouting = Notification.Name("com.audiosync.startRouting")
     static let stopRouting = Notification.Name("com.audiosync.stopRouting")
+    static let audioDevicesChanged = Notification.Name("com.audiosync.audioDevicesChanged")
 }

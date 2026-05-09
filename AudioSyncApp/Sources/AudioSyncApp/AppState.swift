@@ -12,7 +12,6 @@ class AppState: ObservableObject {
     let deviceDiscovery = DeviceDiscovery()
     let systemCapturer = SystemAudioCapturer()
     let outputEngine = MultiOutputEngine()
-    let profileManager = ProfileManager()
 
     @Published var isActive = false
     @Published var deviceSettings: [String: DeviceSettings] = [:]  // keyed by device UID
@@ -63,9 +62,19 @@ class AppState: ObservableObject {
 
         // Audio device hotplug: refresh device list when devices appear/disappear
         AudioObjectAddPropertyListener(AudioObjectID(kAudioObjectSystemObject), &deviceChangeAddr, { _, _, _, _ -> Int32 in
-            DLog("[AppState] Audio device list changed")
+            DLog("[AppState] Audio device list changed — scheduling sync")
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .audioDevicesChanged, object: nil)
+            }
             return noErr
         }, nil)
+
+        // Auto-add new devices to active routing session
+        NotificationCenter.default.addObserver(forName: .audioDevicesChanged, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.syncNewDevices()
+            }
+        }
     }
 
     // MARK: - Start / Stop
@@ -188,6 +197,30 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Sync newly appeared devices into the active routing session.
+    /// Called when CoreAudio detects a device list change while routing is active.
+    private func syncNewDevices() {
+        guard isActive else { return }
+        let captureDeviceID = systemCapturer.activeCaptureDeviceID
+        
+        for device in deviceDiscovery.devices {
+            // Skip capture device (feedback prevention)
+            if let capID = captureDeviceID, device.id == capID { continue }
+            
+            // Already in engine? Skip
+            if deviceSettings[device.uid] != nil { continue }
+            
+            // New device — add with default settings
+            let settings = defaultSettings(for: device)
+            deviceSettings[device.uid] = settings
+            DLog("[AppState] Auto-adding new device '\(device.name)' to routing")
+            
+            if settings.isEnabled {
+                try? outputEngine.addDevice(device, settings: settings)
+            }
+        }
+    }
+
     func updateDelay(_ uid: String, ms: Float) {
         ensureSettingsExist(for: uid)
         deviceSettings[uid]?.delayMs = ms
@@ -256,14 +289,6 @@ class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Snapshot Profile
-
-    /// Create a profile from the current device settings.
-    func snapshotAsProfile(named name: String) {
-        let profile = profileManager.saveAsProfile(named: name, deviceSettings: deviceSettings)
-        profileManager.selectedProfile = profile
-    }
-
     // MARK: - Default Settings
 
     private func defaultSettings(for device: AudioOutputDevice) -> DeviceSettings {
@@ -285,23 +310,4 @@ class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Profile Application
-
-    func applyProfile(_ profile: AudioProfile) {
-        // Merge: profile settings override current, but current settings for
-        // devices NOT in the profile are preserved (avoids data loss from empty profiles)
-        for (uid, settings) in profile.deviceSettings {
-            deviceSettings[uid] = settings
-        }
-        profileManager.selectedProfile = profile
-
-        // Reconfigure the engine if active
-        if isActive {
-            let devicesWithSettings = deviceDiscovery.devices.compactMap { device -> (AudioOutputDevice, DeviceSettings)? in
-                let settings = deviceSettings[device.uid] ?? defaultSettings(for: device)
-                return (device, settings)
-            }
-            try? outputEngine.configure(devices: devicesWithSettings)
-        }
-    }
 }

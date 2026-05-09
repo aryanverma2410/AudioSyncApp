@@ -76,31 +76,4 @@ struct DeviceSettings: Equatable, Codable {
     )
 }
 
-// MARK: - Audio Profile
 
-/// Saved profile of device settings for a particular device combination.
-class AudioProfile: Identifiable, Codable, Hashable {
-    let id: UUID
-    var name: String
-    var deviceSettings: [String: DeviceSettings]  // keyed by device UID
-    var createdDate: Date
-
-    init(id: UUID = UUID(), name: String = "New Profile") {
-        self.id = id
-        self.name = name
-        self.deviceSettings = [:]
-        self.createdDate = Date()
-    }
-
-    // Backward-compatible decoding: old profiles.json may lack 'createdDate'
-    required init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        deviceSettings = try container.decodeIfPresent([String: DeviceSettings].self, forKey: .deviceSettings) ?? [:]
-        createdDate = try container.decodeIfPresent(Date.self, forKey: .createdDate) ?? Date.distantPast
-    }
-
-    static func == (lhs: AudioProfile, rhs: AudioProfile) -> Bool { lhs.id == rhs.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-}
