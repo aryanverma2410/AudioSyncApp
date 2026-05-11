@@ -553,6 +553,24 @@ struct DeviceControlCard: View {
                 in: 0...1,
                 step: 0.01
             )
+
+            // VU meter bar
+            HStack(spacing: 4) {
+                Image(systemName: "waveform")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                GeometryReader { geo in
+                    let level = appState.vuLevels[device.uid] ?? 0
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.gray.opacity(0.2))
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(level > 0.9 ? Color.red : level > 0.5 ? Color.orange : Color.green)
+                            .frame(width: geo.size.width * CGFloat(min(level, 1.0)))
+                    }
+                }
+                .frame(height: 6)
+            }
         }
     }
 
@@ -610,6 +628,17 @@ struct DeviceControlCard: View {
                     Button("500ms") { appState.updateDelay(device.uid, ms: 500) }
                         .font(.caption2)
                         .buttonStyle(.borderless)
+                    Button("Auto") {
+                        let result = appState.autoDelayCompensate()
+                        // Update each device's settings from the result
+                        for (uid, delayMs) in result {
+                            appState.updateDelay(uid, ms: delayMs)
+                        }
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.borderless)
+                    .foregroundColor(.blue)
+                    .help("Measure latency and auto-set delays so all speakers sync")
                 }
             }
         }

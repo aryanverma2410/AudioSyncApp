@@ -98,6 +98,11 @@ final class DelayedRingBuffer: @unchecked Sendable {
         _delayFrames = Int(Double(ms) / 1000.0 * sampleRate)
     }
 
+    /// Current write position (for diagnostics / auto-delay measurement)
+    var currentWritePos: Int { _writePos }
+    /// Current read position (for diagnostics / auto-delay measurement)
+    var currentReadPos: Int { _readPos }
+
     /// Write stereo audio. Called from IOProc (single writer).
     func write(_ input: AVAudioPCMBuffer) {
         _writeCount += 1
@@ -135,8 +140,12 @@ final class DelayedRingBuffer: @unchecked Sendable {
             _readPos = max(wp - totalBehind, 0)
         }
 
-        // Enforce delay: if reader got too close to writer, push it back
+        // Enforce delay: if reader got too close to writer, push it back (delay increased)
+        // OR if reader is too far behind writer, snap it forward (delay decreased — instant response)
         if wp - _readPos < totalBehind {
+            _readPos = wp - totalBehind
+        } else if wp - _readPos > totalBehind + Int(frames) * 2 {
+            // Reader is further behind than needed — jump forward (delay was reduced)
             _readPos = wp - totalBehind
         }
 
@@ -210,6 +219,7 @@ final class DelayedRingBuffer: @unchecked Sendable {
 // File-scope storage for lookup tables (nonisolated, accessible from any context)
 private let _bufferLookup = ThreadSafeLookup<String, DelayedRingBuffer>()
 private let _volumeLookup = ThreadSafeLookup<String, Float>()
+private let _levelLookup = ThreadSafeLookup<String, Float>()  // VU meter: per-device peak level
 
 // MARK: - Multi-Output Engine
 
@@ -494,7 +504,50 @@ final class MultiOutputEngine: ObservableObject {
         MultiOutputEngine.volumeLookup.set(deviceUID, isMuted ? 0 : output.volume)
     }
 
+    // MARK: - VU Meters
 
+    /// Get the current peak level for a device (0.0...1.0). Returns 0 if not found.
+    func peakLevel(for deviceUID: String) -> Float {
+        _levelLookup.get(deviceUID) ?? 0
+    }
+
+    // MARK: - Auto-Delay Compensation
+
+    /// Measure per-device latency by comparing read/write positions in ring buffers.
+    /// Returns ms behind writer for each device UID.
+    @MainActor
+    func measureLatencies() -> [String: Float] {
+        var latencies: [String: Float] = [:]
+        for (uid, output) in deviceOutputs {
+            let wp = output.buffer.currentWritePos
+            let rp = output.buffer.currentReadPos
+            let framesBehind = max(wp - rp, 0)
+            let msBehind = Float(Double(framesBehind) / engineFormat.sampleRate * 1000.0)
+            latencies[uid] = msBehind
+            DLog("[AutoDelay] '\(output.device.name)': \(String(format: "%.1f", msBehind))ms behind (\(framesBehind) frames)")
+        }
+        return latencies
+    }
+
+    /// Apply auto-delay compensation: most-delayed speaker = 0ms, others offset upward.
+    /// Returns the applied delays keyed by device UID.
+    @MainActor
+    func applyAutoDelayCompensation() -> [String: Float] {
+        let latencies = measureLatencies()
+        guard !latencies.isEmpty else { return [:] }
+        let maxLatency = latencies.values.max() ?? 0
+
+        var compensated: [String: Float] = [:]
+        for (uid, latency) in latencies {
+            let offset = max(maxLatency - latency, 0)
+            compensated[uid] = offset
+            if let output = deviceOutputs[uid] {
+                output.buffer.setDelay(ms: offset, sampleRate: engineFormat.sampleRate)
+                DLog("[AutoDelay] '\(output.device.name)' → \(String(format: "%.0f", offset))ms (was \(String(format: "%.1f", latency))ms behind)")
+            }
+        }
+        return compensated
+    }
 
     // MARK: - Add / Remove Device
 
@@ -668,18 +721,27 @@ final class MultiOutputEngine: ObservableObject {
     // MARK: - Device Volume Override
 
     /// Set a HAL audio device's master volume to 1.0 (max).
-    /// ponytail: Only sets channel 0/1 (stereo left/right). Some devices have weird channel layouts — we try and ignore failures.
+    /// This makes our app-side volume slider the sole control for wired/Built-in devices.
+    /// BT devices use AVRCP (not HAL volume) — our volume slider scales samples before
+    /// sending to the HAL unit, which is the only reliable method for BT.
+    /// System notification sounds bypass our routing entirely — they go through
+    /// macOS's dedicated alert sound path, not through BlackHole.
     private static func setDeviceVolumeMax(_ deviceID: AudioObjectID) {
         for ch in [0, 1] {
+            // Try kAudioDevicePropertyVolumeScalar (modern, but unsupported on some BT devices)
             var addr = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyVolumeScalar,
                 mScope: kAudioDevicePropertyScopeOutput,
                 mElement: UInt32(ch))
             var vol: Float = 1.0
-            let status = AudioObjectSetPropertyData(deviceID, &addr, 0, nil, UInt32(MemoryLayout<Float>.size), &vol)
-            if status != noErr {
-                // Some devices don't support per-channel volume (e.g. aggregated) — non-fatal
-                if ch == 0 { DLog("NOTE: device \(deviceID) ch\(ch) volume set failed (\(status)), may not support scalar volume") }
+            var size = UInt32(MemoryLayout<Float>.size)
+            var writable: DarwinBoolean = false
+            let canSet = AudioObjectIsPropertySettable(deviceID, &addr, &writable)
+            if canSet == noErr && writable.boolValue {
+                let status = AudioObjectSetPropertyData(deviceID, &addr, 0, nil, size, &vol)
+                if status == noErr {
+                    DLog("Set device \(deviceID) ch\(ch) volume to max")
+                }
             }
         }
     }
@@ -718,6 +780,20 @@ final class MultiOutputEngine: ObservableObject {
         if vol < 0.999 {
             DelayedRingBuffer.applyVolume(vol, to: ioData, frames: inNumberFrames)
         }
+
+        // VU meter: measure peak level after volume (non-blocking, ~200ns)
+        var peak: Float = 0
+        let abl = UnsafeMutableAudioBufferListPointer(ioData)
+        for buf in abl {
+            guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
+            let ptr = data.assumingMemoryBound(to: Float.self)
+            let count = Int(buf.mDataByteSize / UInt32(MemoryLayout<Float>.size))
+            for i in 0..<min(count, 256) {  // ponytail: sample first 256 frames — fast, good approximation
+                let v = abs(ptr[i])
+                if v > peak { peak = v }
+            }
+        }
+        _levelLookup.set(uid, peak)
 
         return noErr
     }

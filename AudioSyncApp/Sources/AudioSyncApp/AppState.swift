@@ -17,6 +17,13 @@ class AppState: ObservableObject {
     @Published var isActive = false
     @Published var deviceSettings: [String: DeviceSettings] = [:]  // keyed by device UID
     @Published var errorMessage: String?
+    @Published var vuLevels: [String: Float] = [:]  // Per-device VU level (refreshed by timer)
+
+    // Stored so AudioObjectAddPropertyListener callback pointer remains valid
+    private var deviceChangeAddr = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDevices,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
 
     /// Human-readable description of the active capture method (for UI display).
     var captureMethodDescription: String {
@@ -41,6 +48,24 @@ class AppState: ObservableObject {
         NotificationCenter.default.addObserver(forName: .stopRouting, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.stop() }
         }
+
+        // Sleep/wake recovery: restart routing after wake
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.isActive else { return }
+                DLog("[AppState] System woke from sleep — restarting routing")
+                self.stop()
+                // Brief delay for audio subsystem to settle after wake
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await self.start()
+            }
+        }
+
+        // Audio device hotplug: refresh device list when devices appear/disappear
+        AudioObjectAddPropertyListener(AudioObjectID(kAudioObjectSystemObject), &deviceChangeAddr, { _, _, _, _ -> Int32 in
+            DLog("[AppState] Audio device list changed")
+            return noErr
+        }, nil)
     }
 
     // MARK: - Start / Stop
@@ -131,11 +156,14 @@ class AppState: ObservableObject {
         }
 
         isActive = true
+        startVUTimer()
         DLog("Routing started successfully!")
     }
 
     func stop() {
         guard isActive else { return }
+
+        vuTimer?.invalidate(); vuTimer = nil
 
         systemCapturer.stopCapture()
         outputEngine.stop()
@@ -187,6 +215,45 @@ class AppState: ObservableObject {
     /// Play a 440Hz test tone to ALL device ring buffers.
     func testToneAll() {
         outputEngine.injectTestToneAll()
+    }
+
+    // MARK: - Auto-Delay Compensation
+
+    /// Measure latencies and apply auto-delay compensation.
+    /// Most-delayed speaker = 0ms, others offset. Returns applied delays.
+    @MainActor
+    func autoDelayCompensate() -> [String: Float] {
+        let compensated = outputEngine.applyAutoDelayCompensation()
+        // Update deviceSettings to reflect the new delays
+        for (uid, delayMs) in compensated {
+            deviceSettings[uid]?.delayMs = delayMs
+        }
+        return compensated
+    }
+
+    // MARK: - VU Meters
+
+    /// Get the current peak level for a device (0.0...1.0).
+    func peakLevel(for uid: String) -> Float {
+        outputEngine.peakLevel(for: uid)
+    }
+
+    // MARK: - VU Meter Timer
+
+    private var vuTimer: Timer?
+
+    private func startVUTimer() {
+        vuTimer?.invalidate()
+        vuTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                var levels: [String: Float] = [:]
+                for device in self.deviceDiscovery.devices {
+                    levels[device.uid] = self.outputEngine.peakLevel(for: device.uid)
+                }
+                self.vuLevels = levels
+            }
+        }
     }
 
     // MARK: - Snapshot Profile

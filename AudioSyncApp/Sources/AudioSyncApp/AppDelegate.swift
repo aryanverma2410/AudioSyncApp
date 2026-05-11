@@ -1,5 +1,6 @@
 import Cocoa
 import SwiftUI
+import ServiceManagement
 
 // MARK: - App Delegate
 
@@ -42,9 +43,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Start Routing", action: #selector(startRouting), keyEquivalent: "r"))
         menu.addItem(NSMenuItem(title: "Stop Routing", action: #selector(stopRouting), keyEquivalent: "."))
         menu.addItem(NSMenuItem.separator())
+
+        // Launch at Login toggle
+        let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        loginItem.state = launchAtLoginEnabled ? .on : .off
+        menu.addItem(loginItem)
+
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         item.menu = menu
+    }
+
+    // MARK: - Launch at Login
+
+    private var launchAtLoginEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
+        if launchAtLoginEnabled {
+            try? SMAppService.mainApp.unregister()
+            sender.state = .off
+            DLog("[AppDelegate] Launch at Login disabled")
+        } else {
+            do {
+                try SMAppService.mainApp.register()
+                sender.state = .on
+                DLog("[AppDelegate] Launch at Login enabled")
+            } catch {
+                DLog("[AppDelegate] Failed to enable Launch at Login: \(error)")
+            }
+        }
     }
 
     @objc private func openWindow() {
