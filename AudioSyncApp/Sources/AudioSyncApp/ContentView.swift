@@ -501,9 +501,17 @@ struct DeviceControlCard: View {
                         get: { Double(settings.delayMs) },
                         set: { appState.updateDelay(device.uid, ms: Float($0)) }
                     ),
-                    in: 0...500,
+                    in: 0...1000,
                     step: 5
                 )
+
+                TextField("ms", value: Binding(
+                    get: { Double(settings.delayMs) },
+                    set: { appState.updateDelay(device.uid, ms: Float(min(max($0, 0), 1000))) }
+                ), format: .number.precision(.fractionLength(0)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 56)
+                    .font(.caption)
 
                 Button {
                     appState.updateDelay(device.uid, ms: 0)
@@ -596,10 +604,10 @@ struct DeviceControlCard: View {
                     Button("150ms") { appState.updateDelay(device.uid, ms: 150) }
                         .font(.caption2)
                         .buttonStyle(.borderless)
-                    Button("200ms") { appState.updateDelay(device.uid, ms: 200) }
+                    Button("300ms") { appState.updateDelay(device.uid, ms: 300) }
                         .font(.caption2)
                         .buttonStyle(.borderless)
-                    Button("300ms") { appState.updateDelay(device.uid, ms: 300) }
+                    Button("500ms") { appState.updateDelay(device.uid, ms: 500) }
                         .font(.caption2)
                         .buttonStyle(.borderless)
                 }

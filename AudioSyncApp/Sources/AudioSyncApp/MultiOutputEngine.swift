@@ -629,6 +629,10 @@ final class MultiOutputEngine: ObservableObject {
             AudioComponentInstanceDispose(audioUnit); throw EngineError.halConfigFailed
         }
 
+        // Set device hardware volume to max — our app-side volume slider is the sole control.
+        // Without this, the Notification Center volume multiplies with ours, confusing the user.
+        Self.setDeviceVolumeMax(deviceID)
+
         // Verify the CurrentDevice actually stuck after initialization
         var verifyDevID: UInt32 = 0
         var verifySize = UInt32(MemoryLayout<UInt32>.size)
@@ -659,6 +663,25 @@ final class MultiOutputEngine: ObservableObject {
         }
 
         return audioUnit
+    }
+
+    // MARK: - Device Volume Override
+
+    /// Set a HAL audio device's master volume to 1.0 (max).
+    /// ponytail: Only sets channel 0/1 (stereo left/right). Some devices have weird channel layouts — we try and ignore failures.
+    private static func setDeviceVolumeMax(_ deviceID: AudioObjectID) {
+        for ch in [0, 1] {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyVolumeScalar,
+                mScope: kAudioDevicePropertyScopeOutput,
+                mElement: UInt32(ch))
+            var vol: Float = 1.0
+            let status = AudioObjectSetPropertyData(deviceID, &addr, 0, nil, UInt32(MemoryLayout<Float>.size), &vol)
+            if status != noErr {
+                // Some devices don't support per-channel volume (e.g. aggregated) — non-fatal
+                if ch == 0 { DLog("NOTE: device \(deviceID) ch\(ch) volume set failed (\(status)), may not support scalar volume") }
+            }
+        }
     }
 
     // MARK: - HAL Render Callback
