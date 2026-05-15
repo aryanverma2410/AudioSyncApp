@@ -118,8 +118,8 @@ final class DelayedRingBuffer: @unchecked Sendable {
     }
 
     /// Read stereo audio into AudioBufferList. Called from HAL render callback (single reader).
-    /// Reader advances its own _readPos independently — no derivation from _writePos.
-    /// This fixes BT crackling where 44.1kHz reader diverges from 48kHz writer position.
+    /// Reader advances its own _readPos independently, but delay is enforced every read:
+    /// if reader gets closer than (delayFrames + safetyFrames) behind writer, it's pushed back.
     func read(into ioData: UnsafeMutablePointer<AudioBufferList>, frames: UInt32) {
         let abl = UnsafeMutableAudioBufferListPointer(ioData)
         _readCount += 1
@@ -127,26 +127,31 @@ final class DelayedRingBuffer: @unchecked Sendable {
 
         OSMemoryBarrier()
         let wp = _writePos
-        var rp = _readPos
+        let delay = _delayFrames
+        let totalBehind = delay + safetyFrames  // how far behind writer we must stay
 
-        // First read ever: seed _readPos behind writer by (delayFrames + safetyFrames)
-        if rp == 0 && wp > 0 {
-            rp = max(wp - _delayFrames - safetyFrames, 0)
+        // First read ever: seed _readPos
+        if _readPos == 0 && wp > 0 {
+            _readPos = max(wp - totalBehind, 0)
         }
 
+        // Enforce delay: if reader got too close to writer, push it back
+        if wp - _readPos < totalBehind {
+            _readPos = wp - totalBehind
+        }
+
+        var rp = _readPos
+
         // Catch-up: if reader fell too far behind (writer overtook the unread region),
-        // snap read position to (wp - safetyFrames) to avoid reading stale/wrapped data.
-        let available = wp - rp
-        if available > frameCount {
-            // Writer wrapped past us — jump forward
+        // snap read position forward to avoid reading stale/wrapped data.
+        if wp - rp > frameCount {
             rp = wp - safetyFrames
         }
 
         // Underrun check: not enough data written yet
         if wp - rp < Int(frames) {
             DelayedRingBuffer.fillSilence(ioData, frames: frames)
-            // Still advance read position so we don't get permanently stuck
-            _readPos = max(rp, wp - safetyFrames)
+            _readPos = max(rp, wp - totalBehind)
             return
         }
 
