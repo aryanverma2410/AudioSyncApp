@@ -70,11 +70,12 @@ final class DelayedRingBuffer: @unchecked Sendable {
 
     // Atomic positions — writer publishes writePos, reader publishes readPos
     private var _writePos: Int = 0  // Accessed atomically by writer
-    private var _readPos: Int = 0   // Accessed atomically by reader
+    private var _readPos: Int = 0   // Advanced by reader (independent of writer)
     private var _delayFrames: Int = 0
 
     // Safety margin: minimum distance between write and read (prevents underrun on BT)
-    private let safetyFrames: Int = 1024  // ~21ms at 48kHz
+    // BT codecs add 100-200ms latency; 4096 frames ≈ 85ms at 48kHz gives enough headroom.
+    private let safetyFrames: Int = 4096
 
     private(set) var _writeCount: Int = 0
     private(set) var _readCount: Int = 0
@@ -117,7 +118,8 @@ final class DelayedRingBuffer: @unchecked Sendable {
     }
 
     /// Read stereo audio into AudioBufferList. Called from HAL render callback (single reader).
-    /// Reads behind write position by (delayFrames + safetyFrames).
+    /// Reader advances its own _readPos independently — no derivation from _writePos.
+    /// This fixes BT crackling where 44.1kHz reader diverges from 48kHz writer position.
     func read(into ioData: UnsafeMutablePointer<AudioBufferList>, frames: UInt32) {
         let abl = UnsafeMutableAudioBufferListPointer(ioData)
         _readCount += 1
@@ -125,15 +127,26 @@ final class DelayedRingBuffer: @unchecked Sendable {
 
         OSMemoryBarrier()
         let wp = _writePos
-        let delay = _delayFrames
-        let totalDist = delay + safetyFrames
+        var rp = _readPos
 
-        // Read position: behind write by totalDist (clamped to 0 at start)
-        let readStart = max(wp - totalDist, 0)
+        // First read ever: seed _readPos behind writer by (delayFrames + safetyFrames)
+        if rp == 0 && wp > 0 {
+            rp = max(wp - _delayFrames - safetyFrames, 0)
+        }
 
-        // Underrun check
-        if wp - readStart < Int(frames) {
+        // Catch-up: if reader fell too far behind (writer overtook the unread region),
+        // snap read position to (wp - safetyFrames) to avoid reading stale/wrapped data.
+        let available = wp - rp
+        if available > frameCount {
+            // Writer wrapped past us — jump forward
+            rp = wp - safetyFrames
+        }
+
+        // Underrun check: not enough data written yet
+        if wp - rp < Int(frames) {
             DelayedRingBuffer.fillSilence(ioData, frames: frames)
+            // Still advance read position so we don't get permanently stuck
+            _readPos = max(rp, wp - safetyFrames)
             return
         }
 
@@ -143,7 +156,7 @@ final class DelayedRingBuffer: @unchecked Sendable {
             let rightPtr = rightData.assumingMemoryBound(to: Float.self)
 
             for i in 0..<Int(frames) {
-                let frameIdx = (readStart + i) & frameMask
+                let frameIdx = (rp + i) & frameMask
                 let idx = frameIdx * channels
                 leftPtr[i] = buffer[idx]
                 rightPtr[i] = buffer[idx + 1]
@@ -153,13 +166,16 @@ final class DelayedRingBuffer: @unchecked Sendable {
         } else if abl.count == 1, let data = abl[0].mData {
             let ptr = data.assumingMemoryBound(to: Float.self)
             for i in 0..<Int(frames) {
-                let frameIdx = (readStart + i) & frameMask
+                let frameIdx = (rp + i) & frameMask
                 let idx = frameIdx * channels
                 ptr[i * 2] = buffer[idx]
                 ptr[i * 2 + 1] = buffer[idx + 1]
             }
             abl[0].mDataByteSize = frames * 2 * UInt32(MemoryLayout<Float>.size)
         }
+
+        // Advance read position by frames consumed
+        _readPos = rp + Int(frames)
     }
 
     /// Fill output with silence.
