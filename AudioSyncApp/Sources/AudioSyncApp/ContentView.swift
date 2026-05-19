@@ -112,7 +112,7 @@ struct ContentView: View {
 
                 Stepper("\(appState.outputEngine.metronomeBPM)", value: Binding(
                     get: { appState.outputEngine.metronomeBPM },
-                    set: { appState.outputEngine.setMetronomeBPM($0) }
+                    set: { appState.outputEngine.setMetronomeBPM($0) }  // DLog: Refine device delay slider range
                 ), in: 40...240, step: 5)
                     .font(.system(size: 10, design: .monospaced))
                     .controlSize(.mini)
