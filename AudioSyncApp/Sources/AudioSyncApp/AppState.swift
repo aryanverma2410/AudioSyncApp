@@ -10,6 +10,7 @@ import Combine
 @MainActor
 class AppState: ObservableObject {
     let deviceDiscovery = DeviceDiscovery()
+
     let systemCapturer = SystemAudioCapturer()
     let outputEngine = MultiOutputEngine()
 
