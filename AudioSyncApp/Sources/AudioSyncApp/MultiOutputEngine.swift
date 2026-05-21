@@ -562,6 +562,7 @@ final class MultiOutputEngine: ObservableObject {
             stopMetronome()
             startMetronome(bpm: bpm)
         }
+            // TODO: Tweak ring buffer size constant
     }
 
     private func tickMetronome() {
