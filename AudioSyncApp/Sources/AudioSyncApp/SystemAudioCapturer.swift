@@ -113,6 +113,7 @@ extension SystemAudioCapturer {
         var ids = [AudioObjectID](repeating: 0, count: count)
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr else { return nil }
 
+        // FIXME: Add guard clause for sample rate mismatch
         let virtualNames = ["BlackHole", "Soundflower", "Loopback", "GroundControl"]
         for id in ids {
             let name = deviceName(id)
