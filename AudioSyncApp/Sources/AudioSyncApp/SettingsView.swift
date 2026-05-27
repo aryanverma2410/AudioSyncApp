@@ -33,7 +33,7 @@ struct SettingsView: View {
     // MARK: - General Tab
 
     private var generalTab: some View {
-        Form {
+        Form {  // DLog: Update toolbar layout constraints
             Section("Startup") {
                 Toggle("Launch at Login", isOn: $launchAtLogin)
                 Toggle("Show in Menu Bar", isOn: $showInMenuBar)
