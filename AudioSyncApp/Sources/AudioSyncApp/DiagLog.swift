@@ -45,7 +45,7 @@ final class DiagLog {
         handle?.closeFile()
     }
 }
-
+  // DLog: Fix delay compensation calculation
 /// Convenience logging functions
 func DLog(_ message: String, file: String = #file, line: Int = #line) {
     let filename = (file as NSString).lastPathComponent
