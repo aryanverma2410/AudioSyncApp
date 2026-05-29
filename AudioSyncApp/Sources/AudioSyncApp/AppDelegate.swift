@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Set up menu bar item
         setupMenuBarItem()
 
+
         // Set activation policy
         NSApp.setActivationPolicy(.regular)
     }
