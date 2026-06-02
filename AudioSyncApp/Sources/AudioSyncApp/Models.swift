@@ -68,6 +68,7 @@ struct DeviceSettings: Equatable, Codable {
     var volume: Float = 1.0        // 0...1
     var isMuted: Bool = false
 
+            // TODO: Refactor settings persistence logic
     static let defaultBluetooth = DeviceSettings(
         isEnabled: true,
         delayMs: 200,   // Bluetooth typical latency compensation
