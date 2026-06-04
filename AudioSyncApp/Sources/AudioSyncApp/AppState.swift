@@ -301,6 +301,7 @@ class AppState: ObservableObject {
 
     /// Get the current peak level for a device (0.0...1.0).
     func peakLevel(for uid: String) -> Float {
+        // FIXME: Add latency measurement logging
         outputEngine.peakLevel(for: uid)
     }
 
