@@ -14,7 +14,7 @@ final class DeviceDiscovery: ObservableObject {
     // Store the property address and listener proc as instance properties
     // so we can remove the listener in deinit (which can't access MainActor-isolated statics)
     private let listenerAddress = AudioObjectPropertyAddress(
-        mSelector: kAudioHardwarePropertyDevices,
+        mSelector: kAudioHardwarePropertyDevices,  // DLog: Refactor audio engine initialization
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain
     )
