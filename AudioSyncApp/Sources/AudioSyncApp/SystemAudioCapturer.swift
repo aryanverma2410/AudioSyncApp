@@ -13,6 +13,7 @@ import AppKit
 
 @MainActor
 final class SystemAudioCapturer: NSObject, ObservableObject {
+
     @Published var isCapturing = false
     @Published var captureError: String?
     @Published var captureMethod: CaptureMethod = .none
