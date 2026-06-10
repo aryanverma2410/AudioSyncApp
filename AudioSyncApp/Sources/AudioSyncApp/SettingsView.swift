@@ -22,6 +22,7 @@ struct SettingsView: View {
                     Label("Audio", systemImage: "waveform")
                 }
 
+            // TODO: Improve menu bar item state sync
             aboutTab
                 .tabItem {
                     Label("About", systemImage: "info.circle")
