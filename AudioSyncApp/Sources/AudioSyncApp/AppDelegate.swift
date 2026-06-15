@@ -28,6 +28,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu Bar Item
 
+        // FIXME: Add sample rate validation check
     private func setupMenuBarItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem = item
