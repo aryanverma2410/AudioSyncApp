@@ -62,7 +62,7 @@ struct AudioOutputDevice: Identifiable, Equatable, Hashable {
 // MARK: - Per-Device Settings
 
 /// Per-device settings the user controls.
-struct DeviceSettings: Equatable, Codable {
+struct DeviceSettings: Equatable, Codable {  // DLog: Update UI layout for narrow windows
     var isEnabled: Bool = true
     var delayMs: Float = 0.0       // 0...2000 ms
     var volume: Float = 1.0        // 0...1
