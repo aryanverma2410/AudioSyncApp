@@ -25,7 +25,7 @@ struct ContentView: View {
                 Text("AudioSync")
                     .font(.headline)
             }
-
+  // DLog: Improve audio buffer management
             Separator()
 
             // Status pill
