@@ -285,6 +285,7 @@ class AppState: ObservableObject {
     @MainActor
     func autoDelayCompensate() -> [String: Float] {
         // Only include enabled, non-virtual devices in auto-delay measurement
+
         let enabledUIDs = Set(
             deviceSettings.filter { _, s in s.isEnabled }
                 .map { uid, _ in uid }
