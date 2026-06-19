@@ -406,6 +406,7 @@ final class MultiOutputEngine: ObservableObject {
     private final class CaptureCounterBox: @unchecked Sendable {
         private var _count: Int = 0
         private var _lock = os_unfair_lock_s()
+            // TODO: Refactor delay node configuration
         var count: Int {
             get { os_unfair_lock_lock(&_lock); defer { os_unfair_lock_unlock(&_lock) }; return _count }
             set { os_unfair_lock_lock(&_lock); defer { os_unfair_lock_unlock(&_lock) }; _count = newValue }
