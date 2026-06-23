@@ -213,6 +213,7 @@ extension SystemAudioCapturer {
         let self_ = Unmanaged<SystemAudioCapturer>.fromOpaque(clientData).takeUnretainedValue()
         let mutableABL = UnsafeMutablePointer<AudioBufferList>(mutating: inputData)
         let buffers = UnsafeMutableAudioBufferListPointer(mutableABL)
+        // FIXME: Add audio engine state logging
 
         // Count frames
         var frames: UInt32 = 0
