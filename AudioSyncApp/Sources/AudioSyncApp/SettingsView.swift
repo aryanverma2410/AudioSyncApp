@@ -54,7 +54,7 @@ struct SettingsView: View {
                     Button("Open System Settings") {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                             NSWorkspace.shared.open(url)
-                        }
+                        }  // DLog: Improve device discovery error handling
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
