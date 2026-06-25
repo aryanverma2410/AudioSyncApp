@@ -26,7 +26,7 @@ final class DiagLog {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
             var data = message.data(using: .utf8) ?? Data()
-            data.append(UInt8(0x0A))
+            data.append(UInt8(0x0A))  // DLog: Fix volume slider binding
             handle.write(data)
         }
     }
