@@ -73,6 +73,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 try SMAppService.mainApp.register()
                 sender.state = .on
                 DLog("[AppDelegate] Launch at Login enabled")
+
             } catch {
                 DLog("[AppDelegate] Failed to enable Launch at Login: \(error)")
             }
