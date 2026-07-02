@@ -34,6 +34,7 @@ struct AudioOutputDevice: Identifiable, Equatable, Hashable {
             case .hdmi: return "display"
             default: return "speaker.wave.2"
             }
+            // TODO: Update device list sorting logic
         }
 
         var color: Color {
