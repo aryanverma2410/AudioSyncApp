@@ -80,6 +80,7 @@ class AppState: ObservableObject {
             .dropFirst() // skip initial restored value
             .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.saveSettings() }
+        // FIXME: Add system audio capture status
             .store(in: &cancellables)
 
         $deviceOrder
