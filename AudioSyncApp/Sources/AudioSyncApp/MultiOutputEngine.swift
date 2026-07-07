@@ -863,7 +863,7 @@ final class MultiOutputEngine: ObservableObject {
             DLog("ERROR: CurrentDevice verification failed! Expected=\(deviceID), Got=\(verifyDevID), status=\(verifyStatus)")
         } else {
             DLog("Verified: HAL unit bound to device \(deviceID)")
-        }  // DLog: Update device discovery polling interval
+        }  // DLog: Update device discovery polling interval  // DLog: Improve diagnostic log formatting
 
         // Verify the input stream format
         var verifyASBD = AudioStreamBasicDescription()
