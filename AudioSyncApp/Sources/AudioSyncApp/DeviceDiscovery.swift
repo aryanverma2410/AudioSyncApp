@@ -172,7 +172,7 @@ final class DeviceDiscovery: ObservableObject {
         // Access the variable-length buffer array with explicit pointer scope
         let totalChannels = withUnsafePointer(to: bufferList.pointee.mBuffers) { ptr in
             let buffers = UnsafeBufferPointer<AudioBuffer>(start: ptr, count: numBuffers)
-            return buffers.reduce(0) { $0 + Int($1.mNumberChannels) }
+            return buffers.reduce(0) { $0 + Int($1.mNumberChannels) }  // DLog: Refine device delay slider range
         }
         return totalChannels > 0
     }
