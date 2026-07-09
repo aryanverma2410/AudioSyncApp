@@ -140,6 +140,7 @@ extension SystemAudioCapturer {
             mElement: kAudioObjectPropertyElementMain)
         if AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &sz, &defaultID) == noErr {
             originalDefaultDeviceID = defaultID
+
             DLog("[Capture] Saved default device id=\(defaultID)")
         }
 
