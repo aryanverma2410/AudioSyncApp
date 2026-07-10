@@ -38,6 +38,7 @@ struct SettingsView: View {
             Section("Startup") {
                 Toggle("Launch at Login", isOn: $launchAtLogin)
                 Toggle("Show in Menu Bar", isOn: $showInMenuBar)
+            // TODO: Tweak ring buffer size constant
                 Toggle("Auto-start audio capture", isOn: $autoStartCapture)
             }
 
