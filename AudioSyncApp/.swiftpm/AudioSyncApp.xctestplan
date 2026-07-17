@@ -1,0 +1,29 @@
+{
+  "configurations" : [
+    {
+      "id" : "4F3F7F5B-A0AB-4333-896A-733DAAB19A5B",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:",
+      "identifier" : "AudioSyncApp",
+      "name" : "AudioSyncApp"
+    }
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:",
+        "identifier" : "AudioSyncAppTests",
+        "name" : "AudioSyncAppTests"
+      }
+    }
+  ],
+  "version" : 1
+}

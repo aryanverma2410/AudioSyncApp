@@ -1,0 +1,54 @@
+// swift-tools-version: 5.9
+// The swift-tools-version declares the minimum version of Swift required to build this package.
+
+import PackageDescription
+
+let package = Package(
+    name: "AudioSyncApp",
+    platforms: [
+        .macOS(.v14)
+    ],
+    products: [
+        // Products define the executables and libraries a package produces, making them visible to other packages.
+        .executable(
+            name: "AudioSyncApp",
+            targets: ["AudioSyncApp"]),
+        .executable(
+            name: "AudioSyncAppVerification",
+            targets: ["AudioSyncAppVerification"]),
+    ],
+    dependencies: [
+        // Dependencies declare other packages that this package depends on.
+        // We're using Apple's frameworks which are available on macOS, so no external dependencies needed for core functionality
+        // For additional features like DSP, we might add external packages here
+    ],
+    targets: [
+        // Core library containing all shared code (models, managers, views, etc.)
+        .target(
+            name: "AudioSyncAppCore",
+            dependencies: [],
+            path: "Sources/AudioSyncAppCore"),
+
+        // Main application executable
+        .executableTarget(
+            name: "AudioSyncApp",
+            dependencies: ["AudioSyncAppCore"],
+            path: "Sources/AudioSyncApp",
+            resources: [
+                // Copy any resources if needed
+            ]),
+
+        // Verification tool executable
+        .executableTarget(
+            name: "AudioSyncAppVerification",
+            dependencies: ["AudioSyncAppCore"],
+            path: "Sources/AudioSyncApp",
+            sources: ["VerificationApp.swift"]), // Only include verification app source
+
+        // Test target
+        .testTarget(
+            name: "AudioSyncAppTests",
+            dependencies: ["AudioSyncAppCore"],
+            path: "Tests/AudioSyncAppTests"), // Move tests to Tests directory
+    ]
+)
