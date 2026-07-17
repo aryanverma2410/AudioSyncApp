@@ -3,53 +3,44 @@ import SwiftUI
 @main
 struct AudioSyncApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var appState = AppState()
 
-    // Shared instances — created once, shared across all views
-    @StateObject private var audioEngine = AudioEngine()
-    @StateObject private var deviceManager = DeviceManager()
-    @StateObject private var profileManager = AudioProfileManager()
+    init() {
+        // Initialize the diagnostic logger on app launch
+        DLog("AudioSyncApp launched (bundle: \(Bundle.main.bundleIdentifier ?? "unknown"))")
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environmentObject(audioEngine)
-                .environmentObject(deviceManager)
-                .environmentObject(profileManager)
-                .frame(minWidth: 900, minHeight: 650)
+                .environmentObject(appState)
+                .frame(minWidth: 800, minHeight: 500)
         }
         .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandMenu("Playback") {
-                Button("Play") {
-                    audioEngine.load(url: nil)
-                }
-                .keyboardShortcut(.space, modifiers: [])
-
-                Button("Pause") {
-                    audioEngine.pause()
-                }
-                .keyboardShortcut("p", modifiers: .command)
-
-                Button("Stop") {
-                    audioEngine.stop()
-                }
-                .keyboardShortcut("s", modifiers: [.command, .shift])
-            }
-
-            CommandMenu("Devices") {
-                Button("Refresh Devices") {
-                    deviceManager.refreshDevices()
+                Button("Start Routing") {
+                    Task { await appState.start() }
                 }
                 .keyboardShortcut("r", modifiers: .command)
+
+                Button("Stop Routing") {
+                    appState.stop()
+                }
+                .keyboardShortcut(".", modifiers: .command)
+
+                Divider()
+
+                Button("Refresh Devices") {
+                    appState.deviceDiscovery.refreshDevices()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
             }
         }
 
-        // Settings window
         Settings {
-            AppSettingsView()
-                .environmentObject(audioEngine)
-                .environmentObject(deviceManager)
-                .environmentObject(profileManager)
+            SettingsView()
+                .environmentObject(appState)
         }
     }
 }

@@ -2,38 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>
-    <string>Audio Sync</string>
-    <key>CFBundleDisplayName</key>
-    <string>Audio Sync</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.yourcompany.AudioSync</string>
-    <key>CFBundleVersion</key>
-    <string>1.0</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>LSMinimumSystemVersionByArchitecture</key>
-    <dict>
-        <key>x86_64</key>
-        <string>14.0</string>
-        <key>arm64</key>
-        <string>14.0</string>
-    </dict>
-    <key>LSRequiresCarbon</key>
+    <key>com.apple.security.app-sandbox</key>
     <false/>
-    <key>NSHighResolutionCapable</key>
+    <key>com.apple.security.cs.allow-jit</key>
     <true/>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>NSRequiresAquaSystemAppearance</key>
-    <false/>
-    <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>This app uses Bluetooth to monitor battery levels of wireless audio devices.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>This app uses the microphone for optional audio latency calibration features.</string>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>AudioSyncApp</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.audiosync.app</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>AudioSyncApp needs audio capture access to stream system audio to your speakers. Click Allow to grant permission.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>AudioSyncApp needs microphone access to capture system audio for routing to your speakers.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>AudioSyncApp needs screen recording access to capture system audio for routing to your speakers.</string>
+</dict>
+</plist>

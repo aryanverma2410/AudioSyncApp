@@ -1,0 +1,240 @@
+import Foundation
+import SwiftUI
+import CoreAudio
+import AudioToolbox
+
+// MARK: - App State
+
+/// Central coordinator that ties together device discovery, system audio capture,
+/// multi-output routing, and profile management.
+@MainActor
+class AppState: ObservableObject {
+    let deviceDiscovery = DeviceDiscovery()
+    let systemCapturer = SystemAudioCapturer()
+    let outputEngine = MultiOutputEngine()
+    let profileManager = ProfileManager()
+
+    @Published var isActive = false
+    @Published var deviceSettings: [String: DeviceSettings] = [:]  // keyed by device UID
+    @Published var errorMessage: String?
+
+    /// Human-readable description of the active capture method (for UI display).
+    var captureMethodDescription: String {
+        systemCapturer.captureMethod.rawValue
+    }
+
+    // MARK: - Init
+
+    init() {
+        // Wire up the capturer to write DIRECTLY to ring buffers.
+        // distributeAudioDirect is nonisolated (thread-safe), so calling from
+        // the capturer's background queue is fine. This bypasses AVAudioEngine
+        // entirely — SCStream → distributeAudioDirect → ringBuffer → HAL callback.
+        systemCapturer.onAudioBuffer = { [weak self] buffer in
+            self?.outputEngine.distributeAudioDirect(buffer)
+        }
+
+        // Observe menu bar routing notifications from AppDelegate
+        NotificationCenter.default.addObserver(forName: .startRouting, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in await self?.start() }
+        }
+        NotificationCenter.default.addObserver(forName: .stopRouting, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.stop() }
+        }
+    }
+
+    // MARK: - Start / Stop
+
+    func start() async {
+        guard !isActive else { return }
+        errorMessage = nil
+
+        // Step 1: Discover devices
+        deviceDiscovery.refreshDevices()
+
+        guard !deviceDiscovery.devices.isEmpty else {
+            errorMessage = "No audio output devices found. Connect a speaker or headphones."
+            return
+        }
+
+        // Step 2: Start system audio capture FIRST (we need to know the capture device to exclude it from outputs)
+        DLog("Starting system audio capture...")
+        do {
+            try await systemCapturer.startCapture()
+        } catch {
+            let errorDesc = error.localizedDescription
+            if errorDesc.contains("declined") || errorDesc.contains("denied") || errorDesc.contains("TCC") {
+                errorMessage = """
+                Screen Recording permission denied. To fix:
+                
+                1. Open System Settings → Privacy & Security → Screen Recording
+                2. Click '+' and add AudioSyncApp
+                3. Or find 'AudioSyncApp' in the list and enable it
+                4. Restart AudioSyncApp after granting
+                
+                The app needs Screen Recording permission to capture system audio.
+                """
+            } else {
+                errorMessage = "Failed to start audio capture: \(errorDesc)"
+            }
+            DLog("ERROR: capture failed — \(error)")
+            return
+        }
+
+        // Step 3: Build device list with settings, EXCLUDING the capture device to prevent feedback
+        let captureDeviceID = systemCapturer.activeCaptureDeviceID
+        let devicesWithSettings = deviceDiscovery.devices.compactMap { device -> (AudioOutputDevice, DeviceSettings)? in
+            // Exclude the capture device from outputs (would create feedback loop)
+            if let capID = captureDeviceID, device.id == capID {
+                DLog("Excluding '\(device.name)' from outputs (capture source)")
+                return nil
+            }
+            let settings = deviceSettings[device.uid] ?? defaultSettings(for: device)
+            if deviceSettings[device.uid] == nil {
+                deviceSettings[device.uid] = settings
+            }
+            return (device: device, settings: settings)
+        }
+
+        // Log what we're about to configure
+        DLog("Starting routing with \(devicesWithSettings.count) device(s) (excluded capture device):")
+        for (device, settings) in devicesWithSettings {
+            DLog("  - \(device.name) (\(device.transportType.rawValue), id=\(device.id), uid=\(device.uid.prefix(20))…, sr=\(device.sampleRate)), enabled=\(settings.isEnabled), delay=\(settings.delayMs)ms")
+        }
+
+        guard !devicesWithSettings.isEmpty else {
+            errorMessage = "No output devices available after excluding capture device."
+            systemCapturer.stopCapture()
+            return
+        }
+
+        // Step 4: Configure the output engine
+        do {
+            try outputEngine.configure(devices: devicesWithSettings)
+        } catch {
+            errorMessage = "Failed to configure audio engine: \(error.localizedDescription)"
+            DLog("ERROR: configure failed — \(error)")
+            systemCapturer.stopCapture()
+            return
+        }
+
+        // Step 5: Start the output engine (wrapped in crash guard)
+        DLog("Starting output engine...")
+        do {
+            try outputEngine.startSafely()
+        } catch {
+            errorMessage = "Failed to start audio engine: \(error.localizedDescription)"
+            outputEngine.stop()
+            systemCapturer.stopCapture()
+            DLog("ERROR: start failed — \(error)")
+            return
+        }
+
+        isActive = true
+        DLog("Routing started successfully!")
+    }
+
+    func stop() {
+        guard isActive else { return }
+
+        systemCapturer.stopCapture()
+        outputEngine.stop()
+        isActive = false
+        DLog("Routing stopped.")
+    }
+
+    // MARK: - Device Controls
+
+    func toggleDevice(_ uid: String, enabled: Bool) {
+        ensureSettingsExist(for: uid)
+        deviceSettings[uid]?.isEnabled = enabled
+
+        if enabled {
+            // Find the device and add it
+            if let device = deviceDiscovery.devices.first(where: { $0.uid == uid }) {
+                let settings = deviceSettings[uid] ?? defaultSettings(for: device)
+                try? outputEngine.addDevice(device, settings: settings)
+            }
+        } else {
+            outputEngine.removeDevice(uid)
+        }
+    }
+
+    func updateDelay(_ uid: String, ms: Float) {
+        ensureSettingsExist(for: uid)
+        deviceSettings[uid]?.delayMs = ms
+        outputEngine.updateDelay(for: uid, ms: ms)
+    }
+
+    func updateVolume(_ uid: String, volume: Float) {
+        ensureSettingsExist(for: uid)
+        deviceSettings[uid]?.volume = volume
+        outputEngine.updateVolume(for: uid, volume: volume)
+    }
+
+    func updateMute(_ uid: String, isMuted: Bool) {
+        ensureSettingsExist(for: uid)
+        deviceSettings[uid]?.isMuted = isMuted
+        outputEngine.updateMute(for: uid, isMuted: isMuted)
+    }
+
+    /// Play a 440Hz test tone directly into a specific device's ring buffer.
+    /// This bypasses the capture pipeline to test the HAL output unit independently.
+    func testTone(for uid: String) {
+        outputEngine.injectTestTone(for: uid)
+    }
+
+    /// Play a 440Hz test tone to ALL device ring buffers.
+    func testToneAll() {
+        outputEngine.injectTestToneAll()
+    }
+
+    // MARK: - Snapshot Profile
+
+    /// Create a profile from the current device settings.
+    func snapshotAsProfile(named name: String) {
+        let profile = profileManager.saveAsProfile(named: name, deviceSettings: deviceSettings)
+        profileManager.selectedProfile = profile
+    }
+
+    // MARK: - Default Settings
+
+    private func defaultSettings(for device: AudioOutputDevice) -> DeviceSettings {
+        if device.transportType.isBluetooth {
+            return .defaultBluetooth
+        }
+        return DeviceSettings()
+    }
+
+    /// Ensures a DeviceSettings entry exists in deviceSettings for the given device UID.
+    /// This is critical because UI bindings use optional chaining on deviceSettings[uid],
+    /// which silently fails if the key is nil (e.g., before Start Routing is clicked).
+    private func ensureSettingsExist(for uid: String) {
+        if deviceSettings[uid] != nil { return }
+        if let device = deviceDiscovery.devices.first(where: { $0.uid == uid }) {
+            deviceSettings[uid] = defaultSettings(for: device)
+        } else {
+            deviceSettings[uid] = DeviceSettings()
+        }
+    }
+
+    // MARK: - Profile Application
+
+    func applyProfile(_ profile: AudioProfile) {
+        // Merge: profile settings override current, but current settings for
+        // devices NOT in the profile are preserved (avoids data loss from empty profiles)
+        for (uid, settings) in profile.deviceSettings {
+            deviceSettings[uid] = settings
+        }
+        profileManager.selectedProfile = profile
+
+        // Reconfigure the engine if active
+        if isActive {
+            let devicesWithSettings = deviceDiscovery.devices.compactMap { device -> (AudioOutputDevice, DeviceSettings)? in
+                let settings = deviceSettings[device.uid] ?? defaultSettings(for: device)
+                return (device, settings)
+            }
+            try? outputEngine.configure(devices: devicesWithSettings)
+        }
+    }
+}

@@ -1,92 +1,107 @@
-# Audio Sync Application
+# AudioSyncApp — Airfoil Alternative for macOS
 
-A professional macOS application for synchronizing audio playback across multiple output devices with precise latency compensation.
+An open-source Airfoil alternative that captures **all system audio** and routes it to **multiple output devices simultaneously** (MacBook speakers + Bluetooth speakers + any audio output), each with **individually adjustable delay** to compensate for Bluetooth latency differences.
 
 ## Features
 
-- **Multi-Device Audio Output**: Play audio simultaneously through multiple output devices
-- **Per-Device Latency Compensation**: Independent delay adjustment (-1000ms to +1000ms) for perfect synchronization
-- **Independent Volume Control**: Individual volume, mute, and solo controls for each device
-- **Global Controls**: Master volume, play/pause, stop, and synchronization controls
-- **Profile Management**: Save and load different device configurations for various environments
-- **Device Discovery**: Automatic detection of CoreAudio-compatible devices (built-in, Bluetooth, USB, AirPlay, HDMI)
-- **Low Latency Performance**: Optimized for <20ms latency (excluding hardware delays)
-- **Modern macOS Interface**: Built with SwiftUI following Apple's design guidelines
-
-## System Requirements
-
-- macOS 14.0 or later
-- 64-bit Intel or Apple Silicon Mac
-
-## Installation
-
-1. Clone or download this repository
-2. Open `AudioSyncApp.xcodeproj` in Xcode
-3. Select your development team in the signing settings
-4. Build and run the application
-
-## Usage
-
-### Device Setup
-1. Launch the application
-2. The app will automatically detect available audio output devices
-3. Select the devices you want to use for audio playback
-4. Use the delay sliders to synchronize audio output between devices
-5. Adjust individual volumes as needed
-
-### Creating Profiles
-1. Configure your devices with desired volume and delay settings
-2. Click the "+" button in the profiles sidebar
-3. Enter a name for your profile (e.g., "Living Room", "Office")
-4. Click the checkmark to save
-
-### Using Profiles
-1. Select a profile from the sidebar to apply its settings
-2. Click the play button to start audio playback
-3. Adjust settings in real-time while audio is playing
+- 🎵 **System Audio Capture** — Captures all system audio via ScreenCaptureKit (music, videos, games, browser)
+- 🔊 **Multi-Device Output** — Route audio to 3+ devices simultaneously (MacBook speakers + 2 BT speakers)
+- ⏱️ **Per-Speaker Delay** — Individual delay control (0–500ms) per device to sync Bluetooth speakers
+- 🔉 **Per-Speaker Volume** — Independent volume and mute controls per device
+- 💾 **Profiles** — Save and load device delay/volume configurations
+- 🔄 **Hot-Plug Detection** — Automatically detects Bluetooth speakers connecting/disconnecting
+- 📊 **Live Status** — Real-time device count, engine state, CPU usage
 
 ## Architecture
 
-The application follows a modular architecture:
-
-- **AudioEngine**: Core audio processing and playback engine using CoreAudio
-- **DeviceManager**: Discovers and monitors audio input/output devices
-- **ProfileManager**: Handles saving and loading of user configurations
-- **UI Layer**: Built with SwiftUI for a modern, responsive interface
-
-## Audio Processing
-
-The audio engine uses:
-- CoreAudio for low-latency audio input/output
-- Custom buffer management for synchronization
-- Sample-accurate timing for precise sample alignment
-- Dynamic latency compensation for Bluetooth and network devices
-
-## Development
-
-### Project Structure
 ```
-AudioSyncApp/
-├── Sources/
-│   └── AudioSyncApp/
-│       ├── Models.swift          # Data models and protocols
-│       ├── AudioEngine.swift     # Core audio processing
-│       ├── DeviceManager.swift   # Device discovery and monitoring
-│       ├── ProfileManager.swift  # Profile persistence
-│       ├── Views/                # SwiftUI views
-│       └── App.swift             # App entry point
-├── AudioSyncAppTests/            # Unit tests
-└── Resources/                    # Asset catalog, etc.
+┌─────────────────────────────────────────────┐
+│           SystemAudioCapturer               │
+│    (ScreenCaptureKit SCStream + audio)       │
+│         ↓ AVAudioPCMBuffer                  │
+└─────────────────┬───────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────┐
+│           MultiOutputEngine                 │
+│                                             │
+│  ┌──────────┐   ┌──────────────────┐       │
+│  │ Player   │→  │ MainMixerNode    │       │
+│  │ Node     │   │ (tap installed)  │       │
+│  └──────────┘   └────────┬─────────┘       │
+│                          │                  │
+│              ┌───────────┼───────────┐      │
+│              ▼           ▼           ▼      │
+│         ┌────────┐  ┌────────┐  ┌────────┐ │
+│         │RingBuf │  │RingBuf │  │RingBuf │ │
+│         │+Delay  │  │+Delay  │  │+Delay  │ │
+│         │0ms     │  │200ms   │  │150ms   │ │
+│         └───┬────┘  └───┬────┘  └───┬────┘ │
+│             ▼           ▼           ▼      │
+│         ┌────────┐  ┌────────┐  ┌────────┐ │
+│         │HAL Out │  │HAL Out │  │HAL Out │ │
+│         │MacBook │  │BT Spkr1│  │BT Spkr2│ │
+│         └────────┘  └────────┘  └────────┘ │
+└─────────────────────────────────────────────┘
 ```
 
-### Dependencies
-This project uses only Apple's built-in frameworks:
-- SwiftUI
-- CoreAudio
-- AudioToolbox
-- AVFoundation
-- CoreBluetooth (for Bluetooth device battery monitoring)
+**Key Components:**
+- **SystemAudioCapturer**: Uses `SCStream` with `capturesAudio=true` to capture system audio
+- **MultiOutputEngine**: Fan-out architecture with per-device `DelayedRingBuffer` + HAL output unit
+- **DeviceDiscovery**: CoreAudio device enumeration with hot-plug listener
+- **ProfileManager**: JSON-based persistence for device settings
+
+## Requirements
+
+- macOS 13.0+ (Ventura or later)
+- Xcode 15+ (for building)
+- Screen Recording permission (System Settings → Privacy & Security → Screen Recording)
+
+## Building
+
+```bash
+cd AudioSyncApp
+swift build
+```
+
+Or open in Xcode:
+```bash
+open .swiftpm/xcode/package.xcworkspace
+```
+
+## Running
+
+```bash
+swift run AudioSyncApp
+```
+
+On first launch, grant **Screen Recording** permission when prompted. This is required by ScreenCaptureKit to capture system audio.
+
+## Usage
+
+1. **Launch the app** — Your MacBook speakers and any connected Bluetooth devices appear automatically
+2. **Click "Start Routing"** — System audio capture begins
+3. **Adjust delays** — Set 0ms for MacBook speakers, ~200ms for Bluetooth speakers
+4. **Fine-tune** — Use the delay presets (0ms, 150ms, 200ms, 300ms) for quick calibration
+5. **Save a profile** — Click "+" in the sidebar to save your current settings
+
+## Project Structure
+
+```
+Sources/AudioSyncApp/
+├── App.swift                  # SwiftUI entry point + menu commands
+├── AppDelegate.swift          # Menu bar icon, routing notifications
+├── AppState.swift             # Central coordinator
+├── ContentView.swift          # Main UI: device cards + controls
+├── Models.swift               # AudioOutputDevice, DeviceSettings, AudioProfile
+├── DeviceDiscovery.swift       # CoreAudio device enumeration + hot-plug
+├── SystemAudioCapturer.swift   # ScreenCaptureKit audio capture
+├── MultiOutputEngine.swift     # Fan-out to N HAL output units with delay
+├── ProfileManager.swift        # JSON persistence for profiles
+├── ProfileView.swift           # Profile management UI
+└── SettingsView.swift          # Preferences + diagnostics
+```
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT
