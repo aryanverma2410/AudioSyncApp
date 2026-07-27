@@ -1,106 +1,230 @@
-# AudioSyncApp — Airfoil Alternative for macOS
+# AudioSync — Open-Source Airfoil Alternative for macOS
 
-An open-source Airfoil alternative that captures **all system audio** and routes it to **multiple output devices simultaneously** (MacBook speakers + Bluetooth speakers + any audio output), each with **individually adjustable delay** to compensate for Bluetooth latency differences.
+Route **all system audio** to **multiple speakers simultaneously** — each with individual delay, volume, EQ, and role controls. Perfect for syncing Bluetooth speakers with your Mac.
 
-## Features
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-13%2B-blue" />
+  <img src="https://img.shields.io/badge/Swift-5.9-orange" />
+  <img src="https://img.shields.io/github/v/release/aryanverma2410/AudioSyncApp" />
+</p>
 
-- 🎵 **System Audio Capture** — Captures all system audio via ScreenCaptureKit (music, videos, games, browser)
-- 🔊 **Multi-Device Output** — Route audio to 3+ devices simultaneously (MacBook speakers + 2 BT speakers)
-- ⏱️ **Per-Speaker Delay** — Individual delay control (0–500ms) per device to sync Bluetooth speakers
-- 🔉 **Per-Speaker Volume** — Independent volume and mute controls per device
-- 💾 **Profiles** — Save and load device delay/volume configurations
-- 🔄 **Hot-Plug Detection** — Automatically detects Bluetooth speakers connecting/disconnecting
-- 📊 **Live Status** — Real-time device count, engine state, CPU usage
+---
 
-## Architecture
+## ✨ Features
+
+| Feature | Description |
+|---|---|
+| 🎵 **System Audio Capture** | Captures all system audio (music, videos, games, browser) |
+| 🔊 **Multi-Device Output** | Route to unlimited speakers simultaneously |
+| ⏱️ **Per-Speaker Delay** | 0–1000ms per device to sync Bluetooth latency |
+| 🔉 **Per-Speaker Volume & Mute** | Independent controls per device |
+| 🎛️ **Per-Speaker EQ** | Bass, Mid, Treble controls per speaker |
+| 🔄 **Speaker Roles** | Assign Left, Right, Center, or Both per speaker |
+| 👑 **Master Volume** | Single slider scales all speakers proportionally |
+| 🧠 **Habit Learning** | Remembers your preferred volume/delay per speaker |
+| 🎤 **Acoustic Calibration** | Uses the MacBook mic to auto-measure real speaker delays |
+| 💾 **Room Profiles** | Save/switch configs (Living Room, Office, etc.) with ⌘1–5 |
+| 🔧 **Auto Sync** | Measures latency and auto-compensates delays |
+| 🎹 **Metronome** | Diagnostic click to all speakers for alignment testing |
+| 📡 **Hot-Plug Detection** | Auto-detects speakers connecting/disconnecting |
+
+---
+
+## 📦 Installation
+
+### Option 1: Download DMG (Recommended)
+
+1. Go to **[Releases](https://github.com/aryanverma2410/AudioSyncApp/releases)**
+2. Download `AudioSync.dmg`
+3. Open the DMG → drag **AudioSync.app** to **Applications**
+4. **First launch:** Right-click the app → **Open** (required once for unsigned apps)
+
+### Option 2: Build from Source
+
+```bash
+git clone https://github.com/aryanverma2410/AudioSyncApp.git
+cd AudioSyncApp/AudioSyncApp
+swift build -c release
+.build/release/AudioSyncApp
+```
+
+---
+
+## 🔧 Setup Guide (First Time)
+
+AudioSync needs a way to capture your Mac's system audio. There are **two methods** — Method 1 is recommended (no permissions dialog):
+
+### Method 1: BlackHole (Recommended — No Permission Prompt)
+
+[BlackHole](https://existential.audio/blackhole/) is a free, open-source virtual audio driver. It lets AudioSync capture system audio silently without any macOS permission dialogs.
+
+#### Step 1: Install BlackHole
+
+```bash
+# Install via Homebrew
+brew install blackhole-2ch
+```
+
+Or download from [existential.audio/blackhole](https://existential.audio/blackhole/).
+
+#### Step 2: Create a Multi-Output Device
+
+This sends audio to **both** your speakers AND BlackHole simultaneously:
+
+1. Open **Audio MIDI Setup** (search Spotlight for "Audio MIDI Setup")
+2. Click the **⊕** button (bottom-left) → **Create Multi-Output Device**
+3. **Check** ☑️ all your speakers (MacBook Speakers, Bluetooth speakers, etc.)
+4. **Check** ☑️ **BlackHole 2ch**
+5. Rename it to something like **"AudioSync Multi-Output"**
+
+#### Step 3: Set the Multi-Output as Default
+
+1. Open **System Settings → Sound → Output**
+2. Select **"AudioSync Multi-Output"** as the output device
+   - Or in Audio MIDI Setup: right-click → **Use This Device for Sound Output**
+
+#### Step 4: Launch AudioSync
+
+1. Open AudioSync
+2. Click **Start** — it auto-detects BlackHole and captures via it (no permission popups!)
+3. Adjust per-speaker delay, volume, EQ as needed
+
+> **Tip:** If you don't create a Multi-Output device, you'll hear audio from only one speaker. The Multi-Output Device is what fans the audio out to all speakers simultaneously.
+
+### Method 2: ScreenCaptureKit (Fallback — Needs Permission)
+
+If you don't install BlackHole, AudioSync falls back to Apple's ScreenCaptureKit. This works but requires:
+
+1. **Screen Recording permission** — When prompted, click **Allow**
+2. Open **System Settings → Privacy & Security → Screen Recording**
+3. Enable **AudioSync** in the list
+
+> ⚠️ With this method, you must also set your Mac's output to a **Multi-Output Device** (same as Step 2 above) for multi-speaker output.
+
+---
+
+## 🎤 Microphone Permission (For Acoustic Calibration)
+
+The **Calibrate** feature uses your MacBook's built-in mic to measure real speaker latency. If you want to use it:
+
+1. Open **System Settings → Privacy & Security → Microphone**
+2. Enable **AudioSync**
+
+This is **optional** — the app works fully without mic access. You only need it for the acoustic calibration feature.
+
+---
+
+## 🚀 Usage
+
+1. **Launch AudioSync** — Your speakers appear automatically
+2. **Click Start** — System audio capture begins
+3. **Adjust per-speaker delay** — Set 0ms for wired/Built-in, ~200ms for Bluetooth
+4. **Fine-tune with Auto Sync** — Click the **Auto Sync** button to auto-measure and compensate latency
+5. **Use Acoustic Calibration** — Click **Calibrate** for mic-based measurement (experimental)
+6. **Save a Room Profile** — Click the **Profiles** dropdown → **Save Current as Profile…**
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| ⌘R | Start routing |
+| ⌘. | Stop routing |
+| ⇧⌘R | Refresh devices |
+| ⌘1–5 | Quick-switch between first 5 profiles |
+
+---
+
+## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│           SystemAudioCapturer               │
-│    (ScreenCaptureKit SCStream + audio)       │
-│         ↓ AVAudioPCMBuffer                  │
-└─────────────────┬───────────────────────────┘
-                  │
-                  ▼
-┌─────────────────────────────────────────────┐
-│           MultiOutputEngine                 │
-│                                             │
-│  ┌──────────┐   ┌──────────────────┐       │
-│  │ Player   │→  │ MainMixerNode    │       │
-│  │ Node     │   │ (tap installed)  │       │
-│  └──────────┘   └────────┬─────────┘       │
-│                          │                  │
-│              ┌───────────┼───────────┐      │
-│              ▼           ▼           ▼      │
-│         ┌────────┐  ┌────────┐  ┌────────┐ │
-│         │RingBuf │  │RingBuf │  │RingBuf │ │
-│         │+Delay  │  │+Delay  │  │+Delay  │ │
-│         │0ms     │  │200ms   │  │150ms   │ │
-│         └───┬────┘  └───┬────┘  └───┬────┘ │
-│             ▼           ▼           ▼      │
-│         ┌────────┐  ┌────────┐  ┌────────┐ │
-│         │HAL Out │  │HAL Out │  │HAL Out │ │
-│         │MacBook │  │BT Spkr1│  │BT Spkr2│ │
-│         └────────┘  └────────┘  └────────┘ │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│              System Audio Source                  │
+│  (BlackHole virtual device OR ScreenCaptureKit)  │
+└──────────────────┬──────────────────────────────┘
+                   │ AVAudioPCMBuffer
+                   ▼
+┌──────────────────────────────────────────────────┐
+│            MultiOutputEngine                      │
+│                                                   │
+│  ┌─────────┐   ┌─────────┐   ┌─────────┐        │
+│  │RingBuf  │   │RingBuf  │   │RingBuf  │        │
+│  │+Delay 0 │   │+Delay   │   │+Delay   │  …     │
+│  │+EQ      │   │+200ms   │   │+150ms   │        │
+│  │+Role    │   │+EQ      │   │+EQ      │        │
+│  └────┬────┘   └────┬────┘   └────┬────┘        │
+│       ▼             ▼             ▼              │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐        │
+│  │HAL Out  │  │HAL Out  │  │HAL Out  │        │
+│  │MacBook  │  │BT Spkr 1│  │BT Spkr 2│        │
+│  └─────────┘  └─────────┘  └─────────┘        │
+└──────────────────────────────────────────────────┘
 ```
 
-**Key Components:**
-- **SystemAudioCapturer**: Uses `SCStream` with `capturesAudio=true` to capture system audio
-- **MultiOutputEngine**: Fan-out architecture with per-device `DelayedRingBuffer` + HAL output unit
-- **DeviceDiscovery**: CoreAudio device enumeration with hot-plug listener
-- **ProfileManager**: JSON-based persistence for device settings
+---
 
-## Requirements
+## 🛠️ Building from Source (Developer)
+
+### Prerequisites
 
 - macOS 13.0+ (Ventura or later)
-- Xcode 15+ (for building)
-- Screen Recording permission (System Settings → Privacy & Security → Screen Recording)
+- Xcode 15+ or Swift 5.9+
+- [BlackHole 2ch](https://existential.audio/blackhole/) (recommended)
 
-## Building
+### Build & Run
 
 ```bash
 cd AudioSyncApp
-swift build
+swift build                  # Debug build
+swift build -c release       # Release build
+swift run                    # Build + run
 ```
 
-Or open in Xcode:
+### Open in Xcode
+
 ```bash
+cd AudioSyncApp
 open .swiftpm/xcode/package.xcworkspace
 ```
 
-## Running
+### Create a DMG Locally
 
 ```bash
-swift run AudioSyncApp
+brew install create-dmg
+swift build -c release
+
+# Create app bundle
+mkdir -p dist/AudioSync.app/Contents/MacOS
+cp .build/release/AudioSyncApp dist/AudioSync.app/Contents/MacOS/AudioSync
+
+# Create DMG
+create-dmg --volname "AudioSync" --app-drop-link 425 190 AudioSync.dmg dist/
 ```
 
-On first launch, grant **Screen Recording** permission when prompted. This is required by ScreenCaptureKit to capture system audio.
+---
 
-## Usage
+## 🔮 Roadmap
 
-1. **Launch the app** — Your MacBook speakers and any connected Bluetooth devices appear automatically
-2. **Click "Start Routing"** — System audio capture begins
-3. **Adjust delays** — Set 0ms for MacBook speakers, ~200ms for Bluetooth speakers
-4. **Fine-tune** — Use the delay presets (0ms, 150ms, 200ms, 300ms) for quick calibration
-5. **Save a profile** — Click "+" in the sidebar to save your current settings
+- [ ] Code signing & notarization for frictionless install
+- [ ] Real audio synchronization algorithms (drift correction)
+- [ ] Virtual audio driver (eliminate BlackHole dependency)
+- [ ] Network audio (send to other Macs, like real Airfoil)
+- [ ] DSP effects (compression, loudness normalization)
+- [ ] Apple Silicon native optimizations
 
-## Project Structure
+---
 
-```
-Sources/AudioSyncApp/
-├── App.swift                  # SwiftUI entry point + menu commands
-├── AppDelegate.swift          # Menu bar icon, routing notifications
-├── AppState.swift             # Central coordinator
-├── ContentView.swift          # Main UI: device cards + controls
-├── Models.swift               # AudioOutputDevice, DeviceSettings, AudioProfile
-├── DeviceDiscovery.swift       # CoreAudio device enumeration + hot-plug
-├── SystemAudioCapturer.swift   # ScreenCaptureKit audio capture
-├── MultiOutputEngine.swift     # Fan-out to N HAL output units with delay
-├── ProfileManager.swift        # JSON persistence for profiles
-├── ProfileView.swift           # Profile management UI
-└── SettingsView.swift          # Preferences + diagnostics
-```
+## ⚠️ Troubleshooting
+
+| Issue | Solution |
+|---|---|
+| No audio from any speaker | Ensure a **Multi-Output Device** is set as system default in Sound settings |
+| Only one speaker plays | Create a Multi-Output Device in Audio MIDI Setup with all speakers checked |
+| Screen Recording permission loop | Install BlackHole (Method 1) to bypass SCStream entirely |
+| Bluetooth speakers out of sync | Use **Auto Sync** or **Calibrate** to measure and compensate delays |
+| App won't open (Gatekeeper) | Right-click → Open, or `xattr -cr /Applications/AudioSync.app` |
+| Devices not appearing | Click **⟳ Refresh** or reconnect the device |
+
+---
 
 ## License
 
