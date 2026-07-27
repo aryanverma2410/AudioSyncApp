@@ -238,6 +238,46 @@ private let _bufferLookup = ThreadSafeLookup<String, DelayedRingBuffer>()
 private let _volumeLookup = ThreadSafeLookup<String, Float>()
 private let _levelLookup = ThreadSafeLookup<String, Float>()  // VU meter: per-device peak level
 
+// EQ coefficients: bass, treble, mid gain (-1...1) per device UID
+private let _bassLookup = ThreadSafeLookup<String, Float>()
+private let _trebleLookup = ThreadSafeLookup<String, Float>()
+private let _midLookup = ThreadSafeLookup<String, Float>()
+// Speaker role: 0=both, 1=left, 2=center, 3=right (stored as Float for ThreadSafeLookup)
+private let _roleLookup = ThreadSafeLookup<String, Float>()
+
+// MARK: - Simple Biquad (1st-order shelf for bass/treble, peaking for mid)
+
+/// Applies a simple one-pole low-shelf (bass), high-shelf (treble), or peaking (mid) filter.
+/// Coefficient: -1 = max cut, 0 = flat, +1 = max boost (~±6dB range).
+/// Uses a single-pole IIR per band — cheap and stable on the audio thread.
+private final class SimpleEQ: @unchecked Sendable {
+    private var _bassZ: Float = 0
+    private var _trebleZ: Float = 0
+    private var _midZ: Float = 0
+    private let _alpha: Float = 0.995  // ~6Hz cutoff at 48kHz for shelf edges
+
+    func process(_ sample: Float, bass: Float, treble: Float, mid: Float) -> Float {
+        // Bass shelf: boost/cut low frequencies
+        _bassZ = _alpha * _bassZ + (1 - _alpha) * sample
+        let bassOut = sample + bass * 3.0 * (_bassZ - sample * 0.5)
+
+        // Treble shelf: boost/cut high frequencies (via differencing)
+        let hp = sample - _bassZ  // high-pass residue
+        _trebleZ = _alpha * _trebleZ + (1 - _alpha) * hp
+        let trebleOut = bassOut + treble * 3.0 * (_trebleZ - hp * 0.5)
+
+        // Mid: peaking via bandpass (difference of low-pass and high-pass)
+        let bp = _bassZ - _trebleZ
+        _midZ = _alpha * _midZ + (1 - _alpha) * bp
+        let midOut = trebleOut + mid * 2.5 * (_midZ - bp * 0.5)
+
+        return midOut
+    }
+}
+
+// Per-device EQ state (persistent across callbacks)
+private let _eqLookup = ThreadSafeLookup<String, SimpleEQ>()
+
 // MARK: - Multi-Output Engine
 
 /// Routes system audio to multiple output devices with per-device delay and volume.
@@ -567,9 +607,17 @@ final class MultiOutputEngine: ObservableObject {
     }
 
     private func tickMetronome() {
-        // Write a short click to all active ring buffers
-        for (_, output) in deviceOutputs {
-            writeClick(to: output.buffer, sampleRate: engineFormat.sampleRate)
+        // Snapshot device UIDs on main actor, then write on background
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let uids = Array(self.deviceOutputs.keys)
+            for uid in uids {
+                if let output = self.deviceOutputs[uid] {
+                    // Ensure volume lookup is set so render callback plays the click
+                    Self.volumeLookup.set(uid, output.isMuted ? 0 : output.volume)
+                    self.writeClick(to: output.buffer, sampleRate: self.engineFormat.sampleRate)
+                }
+            }
         }
     }
 
@@ -611,6 +659,27 @@ final class MultiOutputEngine: ObservableObject {
         guard let output = deviceOutputs[deviceUID] else { return }
         output.isMuted = isMuted
         MultiOutputEngine.volumeLookup.set(deviceUID, isMuted ? 0 : output.volume)
+    }
+
+    func updateEQ(for deviceUID: String, bass: Float, treble: Float, mid: Float) {
+        _bassLookup.set(deviceUID, bass)
+        _trebleLookup.set(deviceUID, treble)
+        _midLookup.set(deviceUID, mid)
+        // Create EQ state if needed
+        if _eqLookup.get(deviceUID) == nil {
+            _eqLookup.set(deviceUID, SimpleEQ())
+        }
+    }
+
+    func updateRole(for deviceUID: String, role: SpeakerRole) {
+        let rawValue: Float
+        switch role {
+        case .both: rawValue = 0
+        case .left: rawValue = 1
+        case .center: rawValue = 2
+        case .right: rawValue = 3
+        }
+        _roleLookup.set(deviceUID, rawValue)
     }
 
     // MARK: - VU Meters
@@ -762,6 +831,11 @@ final class MultiOutputEngine: ObservableObject {
         MultiOutputEngine.bufferLookup.remove(deviceUID)
         MultiOutputEngine.volumeLookup.remove(deviceUID)
         _levelLookup.remove(deviceUID)
+        _bassLookup.remove(deviceUID)
+        _trebleLookup.remove(deviceUID)
+        _midLookup.remove(deviceUID)
+        _roleLookup.remove(deviceUID)
+        _eqLookup.remove(deviceUID)
         deviceOutputs.removeValue(forKey: deviceUID)
         activeDeviceCount = deviceOutputs.count
     }
@@ -963,6 +1037,44 @@ final class MultiOutputEngine: ObservableObject {
         // Apply volume scaling if not 1.0
         if vol < 0.999 {
             DelayedRingBuffer.applyVolume(vol, to: ioData, frames: inNumberFrames)
+        }
+
+        // Apply EQ (bass/treble/mid) if any band is non-zero
+        let bass = _bassLookup.get(uid) ?? 0
+        let treble = _trebleLookup.get(uid) ?? 0
+        let mid = _midLookup.get(uid) ?? 0
+        let hasEQ = abs(bass) > 0.01 || abs(treble) > 0.01 || abs(mid) > 0.01
+        if hasEQ, let eq = _eqLookup.get(uid) {
+            let abl2 = UnsafeMutableAudioBufferListPointer(ioData)
+            for buf in abl2 {
+                guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
+                let ptr = data.assumingMemoryBound(to: Float.self)
+                let count = Int(buf.mDataByteSize / UInt32(MemoryLayout<Float>.size))
+                for i in 0..<count {
+                    ptr[i] = eq.process(ptr[i], bass: bass, treble: treble, mid: mid)
+                }
+            }
+        }
+
+        // Apply speaker role panning (mute one channel for Left/Right, mix for Center)
+        let roleRaw = _roleLookup.get(uid) ?? 0
+        if roleRaw > 0.5 { // not "both"
+            let abl3 = UnsafeMutableAudioBufferListPointer(ioData)
+            if abl3.count >= 2, let leftData = abl3[0].mData, let rightData = abl3[1].mData {
+                let leftPtr = leftData.assumingMemoryBound(to: Float.self)
+                let rightPtr = rightData.assumingMemoryBound(to: Float.self)
+                let count = Int(abl3[0].mDataByteSize / UInt32(MemoryLayout<Float>.size))
+                if roleRaw < 1.5 { // Left only
+                    for i in 0..<count { rightPtr[i] = leftPtr[i] }
+                } else if roleRaw < 2.5 { // Center: average both channels
+                    for i in 0..<count {
+                        let avg = (leftPtr[i] + rightPtr[i]) * 0.5
+                        leftPtr[i] = avg; rightPtr[i] = avg
+                    }
+                } else { // Right only
+                    for i in 0..<count { leftPtr[i] = rightPtr[i] }
+                }
+            }
         }
 
         // VU meter: measure peak level after volume (non-blocking, ~200ns)

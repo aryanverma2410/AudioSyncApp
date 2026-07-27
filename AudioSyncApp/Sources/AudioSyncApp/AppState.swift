@@ -257,6 +257,31 @@ class AppState: ObservableObject {
         outputEngine.updateMute(for: uid, isMuted: isMuted)
     }
 
+    func updateEQ(_ uid: String, bass: Float, treble: Float, mid: Float) {
+        ensureSettingsExist(for: uid)
+        deviceSettings[uid]?.bass = bass
+        deviceSettings[uid]?.treble = treble
+        deviceSettings[uid]?.mid = mid
+        outputEngine.updateEQ(for: uid, bass: bass, treble: treble, mid: mid)
+    }
+
+    func updateRole(_ uid: String, role: SpeakerRole) {
+        ensureSettingsExist(for: uid)
+        deviceSettings[uid]?.role = role
+        outputEngine.updateRole(for: uid, role: role)
+    }
+
+    /// Normalize all enabled speakers to the same volume (uses the average of current volumes)
+    func normalizeVolumes() {
+        let enabledSettings = deviceSettings.filter { $0.value.isEnabled && !$0.value.isMuted }
+        guard enabledSettings.count > 1 else { return }
+        let avgVolume = enabledSettings.values.map { $0.volume }.reduce(0, +) / Float(enabledSettings.count)
+        for (uid, _) in enabledSettings {
+            deviceSettings[uid]?.volume = avgVolume
+            outputEngine.updateVolume(for: uid, volume: avgVolume)
+        }
+    }
+
     /// Play a 440Hz test tone directly into a specific device's ring buffer.
     /// This bypasses the capture pipeline to test the HAL output unit independently.
     func testTone(for uid: String) {

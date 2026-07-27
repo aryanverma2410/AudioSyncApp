@@ -60,19 +60,40 @@ struct AudioOutputDevice: Identifiable, Equatable, Hashable {
     }
 }
 
+// MARK: - Speaker Role
+
+enum SpeakerRole: String, CaseIterable, Codable {
+    case both = "L+R"
+    case left = "Left"
+    case center = "Center"
+    case right = "Right"
+
+    var iconName: String {
+        switch self {
+        case .both: return "waveform"
+        case .left: return "speaker.wave.1"
+        case .center: return "speaker"
+        case .right: return "speaker.wave.1"
+        }
+    }
+}
+
 // MARK: - Per-Device Settings
 
 /// Per-device settings the user controls.
-struct DeviceSettings: Equatable, Codable {  // DLog: Update UI layout for narrow windows
+struct DeviceSettings: Equatable, Codable {
     var isEnabled: Bool = true
-    var delayMs: Float = 0.0       // 0...2000 ms
+    var delayMs: Float = 0.0       // 0...maxDelayMs
     var volume: Float = 1.0        // 0...1
     var isMuted: Bool = false
+    var role: SpeakerRole = .both
+    var bass: Float = 0.0          // -1...1 (negative = cut, positive = boost)
+    var treble: Float = 0.0        // -1...1
+    var mid: Float = 0.0           // -1...1
 
-            // TODO: Refactor settings persistence logic
     static let defaultBluetooth = DeviceSettings(
         isEnabled: true,
-        delayMs: 200,   // Bluetooth typical latency compensation
+        delayMs: 200,
         volume: 1.0,
         isMuted: false
     )

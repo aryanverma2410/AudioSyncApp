@@ -128,6 +128,17 @@ struct ContentView: View {
             .controlSize(.small)
             .help("Refresh device list")
 
+            Button {
+                appState.normalizeVolumes()
+            } label: {
+                Label("Level", systemImage: "equal.circle")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!appState.isActive)
+            .help("Set all speakers to the same volume level")
+
             Separator()
 
             // Master routing toggle
@@ -347,6 +358,8 @@ struct DeviceControlCard: View {
                     volumeSection
                     vuMeter
                     delaySection
+                    rolePicker
+                    eqSection
                     actionBar
                 }
                 .padding(.horizontal, 12)
@@ -564,6 +577,81 @@ struct DeviceControlCard: View {
                 .buttonStyle(.plain)
                 .help("Reset delay to 0ms")
             }
+        }
+    }
+
+    // MARK: - Role Picker
+
+    private var rolePicker: some View {
+        HStack(spacing: 4) {
+            ForEach(SpeakerRole.allCases, id: \.self) { role in
+                Button {
+                    appState.updateRole(device.uid, role: role)
+                } label: {
+                    Text(role.rawValue)
+                        .font(.system(size: 9, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 3)
+                        .background(settings.role == role ? Color.accentColor.opacity(0.15) : Color.clear)
+                        .foregroundColor(settings.role == role ? .accentColor : .secondary)
+                        .cornerRadius(4)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: - EQ Section
+
+    private var eqSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("EQ", systemImage: "slider.horizontal.3")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                Spacer()
+                // Reset EQ
+                if settings.bass != 0 || settings.treble != 0 || settings.mid != 0 {
+                    Button {
+                        appState.updateEQ(device.uid, bass: 0, treble: 0, mid: 0)
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack(spacing: 10) {
+                // Bass
+                eqKnob(label: "B", value: settings.bass) { appState.updateEQ(device.uid, bass: $0, treble: settings.treble, mid: settings.mid) }
+                // Mid
+                eqKnob(label: "M", value: settings.mid) { appState.updateEQ(device.uid, bass: settings.bass, treble: settings.treble, mid: $0) }
+                // Treble
+                eqKnob(label: "T", value: settings.treble) { appState.updateEQ(device.uid, bass: settings.bass, treble: $0, mid: settings.mid) }
+            }
+        }
+    }
+
+    private func eqKnob(label: String, value: Float, onChange: @escaping (Float) -> Void) -> some View {
+        VStack(spacing: 2) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundColor(value == 0 ? .secondary : .accentColor)
+            Slider(
+                value: Binding(
+                    get: { Double(value) },
+                    set: { onChange(Float($0)) }
+                ),
+                in: -1...1,
+                step: 0.05
+            )
+            .tint(value > 0 ? .accentColor : value < 0 ? .orange : .gray)
+            .frame(width: 60)
+            Text(value == 0 ? "0" : String(format: "%+.1f", value))
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundColor(.secondary)
         }
     }
 
