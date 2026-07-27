@@ -4,6 +4,8 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @State private var newProfileName = ""
+    @State private var showSaveProfileSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -11,6 +13,32 @@ struct ContentView: View {
             Divider()
             mainContent
         }
+        .background(
+            Group {
+                // Keyboard shortcuts for profile switching (⌘1–5)
+                Button("") { selectProfileAt(0) }
+                    .keyboardShortcut("1", modifiers: .command)
+                    .hidden()
+                Button("") { selectProfileAt(1) }
+                    .keyboardShortcut("2", modifiers: .command)
+                    .hidden()
+                Button("") { selectProfileAt(2) }
+                    .keyboardShortcut("3", modifiers: .command)
+                    .hidden()
+                Button("") { selectProfileAt(3) }
+                    .keyboardShortcut("4", modifiers: .command)
+                    .hidden()
+                Button("") { selectProfileAt(4) }
+                    .keyboardShortcut("5", modifiers: .command)
+                    .hidden()
+            }
+        )
+    }
+
+    private func selectProfileAt(_ index: Int) {
+        let sortedNames = appState.profiles.keys.sorted()
+        guard index < sortedNames.count else { return }
+        appState.loadProfile(name: sortedNames[index])
     }
 
     // MARK: - Toolbar
@@ -25,7 +53,61 @@ struct ContentView: View {
                 Text("AudioSync")
                     .font(.headline)
             }
-  // DLog: Improve audio buffer management
+
+            Separator()
+
+            // Profile picker
+            Menu {
+                Button {
+                    showSaveProfileSheet = true
+                } label: {
+                    Label("Save Current as Profile…", systemImage: "plus")
+                }
+
+                Divider()
+
+                if appState.profiles.isEmpty {
+                    Text("No saved profiles").italic()
+                } else {
+                    ForEach(appState.profiles.keys.sorted(), id: \.self) { name in
+                        Button {
+                            appState.loadProfile(name: name)
+                        } label: {
+                            HStack {
+                                Text(name)
+                                if appState.activeProfileName == name {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    ForEach(appState.profiles.keys.sorted(), id: \.self) { name in
+                        Button(role: .destructive) {
+                            appState.deleteProfile(name: name)
+                        } label: {
+                            Label("Delete \"\(name)\"", systemImage: "trash")
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.caption)
+                    Text(appState.activeProfileName ?? "Profiles")
+                        .font(.caption)
+                        .lineLimit(1)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Save, load, or delete room profiles (⌘1–5 for quick switch)")
+            .popover(isPresented: $showSaveProfileSheet) {
+                saveProfilePopover
+            }
+
             Separator()
 
             // Status pill
@@ -63,7 +145,41 @@ struct ContentView: View {
                 .foregroundColor(appState.systemCapturer.captureMethod == .coreAudio ? .green : .orange)
             }
 
+            // Auto-sync indicator
+            if appState.isAutoSyncing {
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Measuring…")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+            }
+
             Spacer()
+
+            // Master volume
+            HStack(spacing: 4) {
+                Image(systemName: "speaker.wave.2.fill")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Slider(
+                    value: Binding(
+                        get: { Double(appState.masterVolume) },
+                        set: { appState.setMasterVolume(Float($0)) }
+                    ),
+                    in: 0...1,
+                    step: 0.01
+                )
+                .frame(width: 80)
+                Text("\(Int(appState.masterVolume * 100))%")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(width: 32, alignment: .trailing)
+            }
+            .help("Master volume — proportionally scales all speakers")
+
+            Separator()
 
             // Action buttons
             Button {
@@ -87,7 +203,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .disabled(!appState.isActive)
+            .disabled(!appState.isActive || appState.isAutoSyncing)
             .help("Measure latency and auto-compensate delays so all speakers sync")
 
             Separator()
@@ -112,7 +228,7 @@ struct ContentView: View {
 
                 Stepper("\(appState.outputEngine.metronomeBPM)", value: Binding(
                     get: { appState.outputEngine.metronomeBPM },
-                    set: { appState.outputEngine.setMetronomeBPM($0) }  // DLog: Refine device delay slider range
+                    set: { appState.outputEngine.setMetronomeBPM($0) }
                 ), in: 40...240, step: 5)
                     .font(.system(size: 10, design: .monospaced))
                     .controlSize(.mini)
@@ -137,7 +253,18 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(!appState.isActive)
-            .help("Set all speakers to the same volume level")
+            .help("Set all speakers to average volume level")
+
+            Button {
+                appState.resetAllEQ()
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!appState.isActive)
+            .help("Reset all speakers' EQ to flat")
 
             Separator()
 
@@ -165,6 +292,35 @@ struct ContentView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    // MARK: - Save Profile Popover
+
+    private var saveProfilePopover: some View {
+        VStack(spacing: 12) {
+            Text("Save Room Profile")
+                .font(.headline)
+            TextField("Profile name", text: $newProfileName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 200)
+            HStack(spacing: 8) {
+                Button("Cancel") {
+                    showSaveProfileSheet = false
+                    newProfileName = ""
+                }
+                .buttonStyle(.bordered)
+                Button("Save") {
+                    guard !newProfileName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                    appState.saveProfile(name: newProfileName.trimmingCharacters(in: .whitespaces))
+                    showSaveProfileSheet = false
+                    newProfileName = ""
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(newProfileName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding()
+        .frame(width: 260)
     }
 
     // MARK: - Separator

@@ -101,4 +101,20 @@ struct DeviceSettings: Equatable, Codable {
     static let maxDelayMs: Float = 1000
 }
 
+// MARK: - Room Profile
+
+/// A saved snapshot of all device settings, order, and metronome BPM.
+/// Used to quickly switch between room configurations (e.g., "Living Room", "Office").
+struct RoomProfile: Codable, Equatable {
+    var name: String
+    var deviceSettings: [String: DeviceSettings]
+    var deviceOrder: [String]
+    var metronomeBPM: Int
+    var timestamp: Date
+
+    static func == (lhs: RoomProfile, rhs: RoomProfile) -> Bool {
+        lhs.name == rhs.name
+    }
+}
+
 

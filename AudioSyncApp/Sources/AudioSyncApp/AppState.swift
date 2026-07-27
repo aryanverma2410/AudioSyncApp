@@ -19,6 +19,10 @@ class AppState: ObservableObject {
     @Published var errorMessage: String?
     @Published var vuLevels: [String: Float] = [:]  // Per-device VU level (refreshed by timer)
     @Published var deviceOrder: [String] = []  // Device UIDs in display order
+    @Published var profiles: [String: RoomProfile] = [:]
+    @Published var activeProfileName: String?
+    @Published var masterVolume: Float = 1.0
+    @Published var isAutoSyncing = false
     private var cancellables = Set<AnyCancellable>()
 
     /// Human-readable description of the active capture method (for UI display).
@@ -30,6 +34,9 @@ class AppState: ObservableObject {
     
     private static let kSettingsKey = "com.audiosync.deviceSettings"
     private static let kOrderKey = "com.audiosync.deviceOrder"
+    private static let kProfilesKey = "com.audiosync.profiles"
+    private static let kActiveProfileKey = "com.audiosync.activeProfile"
+    private static let kMasterVolumeKey = "com.audiosync.masterVolume"
 
     // MARK: - Init
 
@@ -282,6 +289,81 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Set all enabled, non-muted devices to a specific volume level.
+    func setAllVolumeToLevel(_ targetVolume: Float) {
+        for (uid, settings) in deviceSettings where settings.isEnabled && !settings.isMuted {
+            deviceSettings[uid]?.volume = targetVolume
+            outputEngine.updateVolume(for: uid, volume: targetVolume)
+        }
+    }
+
+    /// Set master volume (proportionally scales all speakers).
+    func setMasterVolume(_ level: Float) {
+        masterVolume = level
+        outputEngine.setMasterVolume(level)
+    }
+
+    /// Reset all speakers' EQ to flat.
+    func resetAllEQ() {
+        outputEngine.resetAllEQ()
+        for uid in deviceSettings.keys {
+            deviceSettings[uid]?.bass = 0
+            deviceSettings[uid]?.treble = 0
+            deviceSettings[uid]?.mid = 0
+        }
+    }
+
+    // MARK: - Room Profiles
+
+    /// Save the current configuration as a named profile.
+    func saveProfile(name: String) {
+        let profile = RoomProfile(
+            name: name,
+            deviceSettings: deviceSettings,
+            deviceOrder: deviceOrder,
+            metronomeBPM: outputEngine.metronomeBPM,
+            timestamp: Date()
+        )
+        profiles[name] = profile
+        activeProfileName = name
+        saveSettings()
+    }
+
+    /// Load a saved profile and apply its settings.
+    func loadProfile(name: String) {
+        guard let profile = profiles[name] else { return }
+        deviceSettings = profile.deviceSettings
+        deviceOrder = profile.deviceOrder
+        outputEngine.setMetronomeBPM(profile.metronomeBPM)
+        activeProfileName = name
+        // Re-apply settings to the engine if active
+        if isActive {
+            for (uid, settings) in deviceSettings where settings.isEnabled {
+                outputEngine.updateVolume(for: uid, volume: settings.volume)
+                outputEngine.updateDelay(for: uid, ms: settings.delayMs)
+                outputEngine.updateEQ(for: uid, bass: settings.bass, treble: settings.treble, mid: settings.mid)
+                outputEngine.updateRole(for: uid, role: settings.role)
+            }
+        }
+    }
+
+    /// Delete a saved profile.
+    func deleteProfile(name: String) {
+        profiles.removeValue(forKey: name)
+        if activeProfileName == name { activeProfileName = nil }
+        saveSettings()
+    }
+
+    /// Rename a saved profile.
+    func renameProfile(old: String, new: String) {
+        guard var profile = profiles[old] else { return }
+        profiles.removeValue(forKey: old)
+        profile.name = new
+        profiles[new] = profile
+        if activeProfileName == old { activeProfileName = new }
+        saveSettings()
+    }
+
     /// Play a 440Hz test tone directly into a specific device's ring buffer.
     /// This bypasses the capture pipeline to test the HAL output unit independently.
     func testTone(for uid: String) {
@@ -310,8 +392,10 @@ class AppState: ObservableObject {
 
     @MainActor
     func autoDelayCompensate() -> [String: Float] {
-        // Only include enabled, non-virtual devices in auto-delay measurement
+        guard isActive else { return [:] }
+        isAutoSyncing = true
 
+        // Only include enabled, non-virtual devices in auto-delay measurement
         let enabledUIDs = Set(
             deviceSettings.filter { _, s in s.isEnabled }
                 .map { uid, _ in uid }
@@ -321,6 +405,7 @@ class AppState: ObservableObject {
         for (uid, delayMs) in compensated {
             deviceSettings[uid]?.delayMs = delayMs
         }
+        isAutoSyncing = false
         return compensated
     }
 
@@ -379,7 +464,13 @@ class AppState: ObservableObject {
             defaults.set(encoded, forKey: Self.kSettingsKey)
         }
         defaults.set(deviceOrder, forKey: Self.kOrderKey)
-        DLog("[AppState] Settings saved (\(deviceSettings.count) devices)")
+        // Persist profiles
+        if let encoded = try? JSONEncoder().encode(profiles) {
+            defaults.set(encoded, forKey: Self.kProfilesKey)
+        }
+        defaults.set(activeProfileName, forKey: Self.kActiveProfileKey)
+        defaults.set(masterVolume, forKey: Self.kMasterVolumeKey)
+        DLog("[AppState] Settings saved (\(deviceSettings.count) devices, \(profiles.count) profiles)")
     }
 
     private func restoreSettings() {
@@ -390,6 +481,21 @@ class AppState: ObservableObject {
             DLog("[AppState] Restored \(saved.count) device settings")
         }
         deviceOrder = defaults.stringArray(forKey: Self.kOrderKey) ?? []
+        // Restore profiles
+        if let data = defaults.data(forKey: Self.kProfilesKey),
+           let saved = try? JSONDecoder().decode([String: RoomProfile].self, from: data) {
+            profiles = saved
+            DLog("[AppState] Restored \(saved.count) room profiles")
+        }
+        activeProfileName = defaults.string(forKey: Self.kActiveProfileKey)
+        masterVolume = defaults.float(forKey: Self.kMasterVolumeKey)
+        if masterVolume <= 0 { masterVolume = 1.0 }
+        // Apply master volume to engine
+        outputEngine.setMasterVolume(masterVolume)
+        // Auto-load active profile on launch
+        if let name = activeProfileName, profiles[name] != nil {
+            loadProfile(name: name)
+        }
     }
 
 }

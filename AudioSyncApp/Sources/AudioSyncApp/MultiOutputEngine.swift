@@ -63,6 +63,13 @@ final class ThreadSafeLookup<Key: Hashable, Value>: @unchecked Sendable {
         dict.removeAll()
     }
 
+    /// Returns a snapshot of all keys. Acquires lock briefly.
+    var allKeys: [Key] {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return Array(dict.keys)
+    }
+
     /// Returns a snapshot of all values. Acquires lock briefly.
     var allValues: [Value] {
         os_unfair_lock_lock(&lock)
@@ -244,6 +251,8 @@ private let _trebleLookup = ThreadSafeLookup<String, Float>()
 private let _midLookup = ThreadSafeLookup<String, Float>()
 // Speaker role: 0=both, 1=left, 2=center, 3=right (stored as Float for ThreadSafeLookup)
 private let _roleLookup = ThreadSafeLookup<String, Float>()
+// Master volume multiplier (applied on top of individual volumes in render callback)
+private let _masterVolume = AtomicFloat(1.0)
 
 // MARK: - Simple Biquad (1st-order shelf for bass/treble, peaking for mid)
 
@@ -607,16 +616,13 @@ final class MultiOutputEngine: ObservableObject {
     }
 
     private func tickMetronome() {
-        // Snapshot device UIDs on main actor, then write on background
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let uids = Array(self.deviceOutputs.keys)
-            for uid in uids {
-                if let output = self.deviceOutputs[uid] {
-                    // Ensure volume lookup is set so render callback plays the click
-                    Self.volumeLookup.set(uid, output.isMuted ? 0 : output.volume)
-                    self.writeClick(to: output.buffer, sampleRate: self.engineFormat.sampleRate)
-                }
+        // Write clicks to ALL ring buffers — metronome is a diagnostic tool
+        // that should output to every speaker regardless of volume/mute state.
+        // The HAL render callback handles volume attenuation; we just ensure
+        // the click data reaches every buffer.
+        for uid in _bufferLookup.allKeys {
+            if let rb = _bufferLookup.get(uid) {
+                self.writeClick(to: rb, sampleRate: self.engineFormat.sampleRate)
             }
         }
     }
@@ -682,6 +688,25 @@ final class MultiOutputEngine: ObservableObject {
         _roleLookup.set(deviceUID, rawValue)
     }
 
+    /// Set the master volume multiplier (0...1). Applied on top of individual
+    /// device volumes in the HAL render callback. This lets users scale all
+    /// speakers proportionally without changing individual levels.
+    func setMasterVolume(_ vol: Float) {
+        _masterVolume.store(min(max(vol, 0), 1))
+    }
+
+    /// Reset all device EQ bands to flat (0). Returns the list of affected UIDs.
+    @discardableResult
+    func resetAllEQ() -> [String] {
+        let uids = _bassLookup.allKeys
+        for uid in uids {
+            _bassLookup.set(uid, 0)
+            _trebleLookup.set(uid, 0)
+            _midLookup.set(uid, 0)
+        }
+        return uids
+    }
+
     // MARK: - VU Meters
 
     /// Get the current peak level for a device (0.0...1.0). Returns 0 if not found.
@@ -695,15 +720,16 @@ final class MultiOutputEngine: ObservableObject {
     /// Temporarily zeros all delays so ring buffer fill reflects hardware latency only
     /// (not our added delay). Differences in fill level reveal BT codec latency etc.
     @MainActor
-    func measureLatencies(enabledUIDs: Set<String>, currentDelays: [String: Float] = [:], sampleCount: Int = 5) -> [String: Float] {
+    func measureLatencies(enabledUIDs: Set<String>, currentDelays: [String: Float] = [:], sampleCount: Int = 8) -> [String: Float] {
         // Step 1: Zero all delays so ring buffer fill = safetyFrames + hardware_latency
         for uid in enabledUIDs {
             if let output = deviceOutputs[uid] {
                 output.buffer.setDelay(ms: 0, sampleRate: engineFormat.sampleRate)
             }
         }
-        // Wait for buffers to settle at the new delay (reader needs a few cycles)
-        usleep(300_000) // 300ms settle time
+        // Wait for buffers to settle at the new delay (reader needs a few cycles).
+        // 500ms gives BT codecs enough time to stabilize after delay change.
+        usleep(500_000) // 500ms settle time
         
         var samples: [String: [Float]] = [:]
         for uid in enabledUIDs {
@@ -1025,7 +1051,9 @@ final class MultiOutputEngine: ObservableObject {
             return noErr
         }
 
-        let vol = _volumeLookup.get(uid) ?? 0
+        let individualVol = _volumeLookup.get(uid) ?? 0
+        let masterVol = _masterVolume.load()
+        let vol = individualVol * masterVol
 
         if vol < 0.001 {
             DelayedRingBuffer.fillSilence(ioData, frames: inNumberFrames)

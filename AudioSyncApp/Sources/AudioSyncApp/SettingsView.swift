@@ -22,7 +22,11 @@ struct SettingsView: View {
                     Label("Audio", systemImage: "waveform")
                 }
 
-            // TODO: Improve menu bar item state sync
+            profilesTab
+                .tabItem {
+                    Label("Profiles", systemImage: "square.grid.2x2")
+                }
+
             aboutTab
                 .tabItem {
                     Label("About", systemImage: "info.circle")
@@ -137,6 +141,85 @@ struct SettingsView: View {
 
                 Button("Refresh Devices Now") {
                     appState.deviceDiscovery.refreshDevices()
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
+    // MARK: - Profiles Tab
+
+    @State private var newProfileName = ""
+
+    private var profilesTab: some View {
+        Form {
+            Section("Room Profiles") {
+                Text("Save and restore speaker configurations for different rooms or setups. Use ⌘1–5 to quickly switch between the first 5 profiles.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if appState.profiles.isEmpty {
+                    Text("No profiles saved yet")
+                        .italic()
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(appState.profiles.keys.sorted(), id: \.self) { name in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(name)
+                                        .fontWeight(.medium)
+                                    if appState.activeProfileName == name {
+                                        Text("Active")
+                                            .font(.caption2)
+                                            .foregroundColor(.green)
+                                            .padding(.horizontal, 4)
+                                            .padding(.vertical, 1)
+                                            .background(Color.green.opacity(0.1))
+                                            .cornerRadius(3)
+                                    }
+                                }
+                                if let profile = appState.profiles[name] {
+                                    Text("\(profile.deviceSettings.count) devices • \(profile.metronomeBPM) BPM • \(profile.timestamp, style: .relative)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Button {
+                                appState.loadProfile(name: name)
+                            } label: {
+                                Image(systemName: "arrow.uturn.backward")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help("Load this profile")
+
+                            Button(role: .destructive) {
+                                appState.deleteProfile(name: name)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help("Delete this profile")
+                        }
+                    }
+                }
+            }
+
+            Section("Create Profile") {
+                HStack {
+                    TextField("Profile name", text: $newProfileName)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Save Current") {
+                        guard !newProfileName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                        appState.saveProfile(name: newProfileName.trimmingCharacters(in: .whitespaces))
+                        newProfileName = ""
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newProfileName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }
