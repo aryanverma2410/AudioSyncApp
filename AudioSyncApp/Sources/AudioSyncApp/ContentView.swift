@@ -217,6 +217,17 @@ struct ContentView: View {
             .disabled(!appState.isActive)
             .help("Restore your usual volume/delay settings learned from past adjustments")
 
+            Button {
+                Task { await appState.startAcousticCalibration() }
+            } label: {
+                Label("Calibrate", systemImage: "mic.badge.plus")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!appState.isActive || appState.calibrator.state == .measuring || appState.calibrator.state == .crossChecking)
+            .help("Acoustic calibration: use the MacBook mic to measure real speaker delays")
+
             Separator()
 
             // Metronome
@@ -364,6 +375,11 @@ struct ContentView: View {
                         restartBar
                     }
 
+                    // Calibration panel (when calibrating or done)
+                    if appState.calibrator.state != .idle {
+                        calibrationPanel
+                    }
+
                     // Device grid
                     if appState.deviceDiscovery.devices.isEmpty {
                         emptyStateView
@@ -374,6 +390,142 @@ struct ContentView: View {
                 .padding(20)
             }
         }
+    }
+
+    // MARK: - Calibration Panel
+
+    private var calibrationPanel: some View {
+        VStack(spacing: 10) {
+            // Header
+            HStack {
+                Image(systemName: "mic.fill")
+                    .foregroundColor(.accentColor)
+                Text("Acoustic Calibration")
+                    .font(.system(size: 13, weight: .semibold))
+
+                Spacer()
+
+                // State indicator
+                switch appState.calibrator.state {
+                case .requestingPermission:
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.mini)
+                        Text("Requesting mic permission…")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                case .measuring:
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.mini)
+                        Text("Measuring speaker \(appState.calibrator.currentDeviceIndex + 1)/\(appState.calibrator.totalDevices)…")
+                            .font(.caption)
+                            .foregroundColor(.accentColor)
+                    }
+                case .crossChecking:
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.mini)
+                        Text("Cross-checking…")
+                            .font(.caption)
+                            .foregroundColor(.accentColor)
+                    }
+                case .done:
+                    Text("Complete")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.green)
+                case .failed:
+                    Text("Failed")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.red)
+                default:
+                    EmptyView()
+                }
+
+                // Cancel / Dismiss
+                if appState.calibrator.state == .measuring || appState.calibrator.state == .crossChecking {
+                    Button("Cancel") { appState.calibrator.cancelCalibration() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                }
+            }
+
+            // Error message
+            if let error = appState.calibrator.errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+
+            // Results table
+            let orderedResults = appState.calibrator.results.values.sorted { ($0.arrivalMs ?? 0) < ($1.arrivalMs ?? 0) }
+            if !orderedResults.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(orderedResults) { result in
+                        HStack {
+                            Text(result.deviceName)
+                                .font(.system(size: 11, weight: .medium))
+                                .lineLimit(1)
+
+                            Spacer()
+
+                            if let arrival = result.arrivalMs {
+                                Text(String(format: "%.0f ms", arrival))
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Text("—")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                            }
+
+                            if let delay = result.recommendedDelayMs {
+                                Text("→ \(String(format: "%.0f", delay)) ms delay")
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .foregroundColor(delay > 0 ? .accentColor : .green)
+                            }
+
+                            // Confidence dot
+                            if result.isMeasured {
+                                Circle()
+                                    .fill(result.confidence > 0.7 ? .green : result.confidence > 0.3 ? .yellow : .red)
+                                    .frame(width: 6, height: 6)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(4)
+                    }
+                }
+            }
+
+            // Apply button
+            if appState.calibrator.state == .done {
+                HStack {
+                    Button {
+                        appState.applyCalibrationResults()
+                    } label: {
+                        Label("Apply Delays", systemImage: "checkmark.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button {
+                        appState.calibrator.state = .idle
+                    } label: {
+                        Text("Dismiss")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.accentColor.opacity(0.05))
+        .cornerRadius(8)
     }
 
     // MARK: - Restart Bar

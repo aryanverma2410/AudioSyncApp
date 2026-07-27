@@ -24,6 +24,7 @@ class AppState: ObservableObject {
     @Published var masterVolume: Float = 1.0
     @Published var isAutoSyncing = false
     @Published var habits: [String: DeviceHabit] = [:]  // Learned per-device habits
+    let calibrator = AcousticCalibrator()
     private var cancellables = Set<AnyCancellable>()
 
     /// Human-readable description of the active capture method (for UI display).
@@ -53,6 +54,9 @@ class AppState: ObservableObject {
         systemCapturer.onAudioBuffer = { [weak self] buffer in
             self?.outputEngine.distributeAudioDirect(buffer)
         }
+
+        // Wire calibrator to engine (for injecting calibration chirps)
+        calibrator.outputEngine = outputEngine
 
         // Observe menu bar routing notifications from AppDelegate
         NotificationCenter.default.addObserver(forName: .startRouting, object: nil, queue: .main) { [weak self] _ in
@@ -433,6 +437,25 @@ class AppState: ObservableObject {
 
     func moveDevice(from source: IndexSet, to destination: Int) {
         deviceOrder.move(fromOffsets: source, toOffset: destination)
+    }
+
+    /// Start acoustic calibration using the MacBook mic.
+    /// Measures real speaker latency by playing chirps and listening.
+    func startAcousticCalibration() async {
+        guard isActive else { return }
+        let devices = deviceDiscovery.devices.compactMap { device -> (uid: String, name: String)? in
+            // Exclude the capture device
+            if let capID = systemCapturer.activeCaptureDeviceID, device.id == capID { return nil }
+            let settings = deviceSettings[device.uid]
+            guard settings?.isEnabled ?? true else { return nil }
+            return (uid: device.uid, name: device.name)
+        }
+        await calibrator.startCalibration(deviceUIDs: devices)
+    }
+
+    /// Apply calibration results (set delays from acoustic measurement).
+    func applyCalibrationResults() {
+        calibrator.applyResults(to: self)
     }
 
     /// Restart routing to pick up any devices that weren't properly added.

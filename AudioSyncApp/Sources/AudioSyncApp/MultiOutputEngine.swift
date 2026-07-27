@@ -498,6 +498,62 @@ final class MultiOutputEngine: ObservableObject {
         }
     }
 
+    /// Inject a calibration chirp (1000→2000Hz sweep, 60ms) into a specific device's ring buffer.
+    /// Used by AcousticCalibrator to measure real speaker latency via mic.
+    func injectCalibrationChirp(for deviceUID: String) {
+        guard let output = deviceOutputs[deviceUID] else {
+            DLog("injectCalibrationChirp: no HAL unit for '\(deviceUID)'")
+            return
+        }
+
+        let needsStart = !isRunning
+        if needsStart {
+            let status = AudioOutputUnitStart(output.halUnit)
+            if status != noErr {
+                DLog("injectCalibrationChirp: failed to start HAL unit (status \(status))")
+                return
+            }
+        }
+
+        // Ensure volume is non-zero so chirp is audible
+        Self.volumeLookup.set(deviceUID, max(output.volume, 0.5))
+
+        let sampleRate = engineFormat.sampleRate
+        let chirpDuration = 0.06  // 60ms
+        let totalFrames = AVAudioFrameCount(sampleRate * chirpDuration)
+
+        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: engineFormat, frameCapacity: totalFrames) else { return }
+        pcmBuffer.frameLength = totalFrames
+
+        let freqStart: Double = 1000.0
+        let freqEnd: Double = 2000.0
+        var phase: Float = 0
+
+        for frame in 0..<Int(totalFrames) {
+            let progress = Double(frame) / Double(totalFrames)
+            let freq = freqStart + (freqEnd - freqStart) * progress
+            phase += Float(2.0 * Double.pi * freq / sampleRate)
+            let envelope = cosineEnvelope(frame: frame, totalFrames: Int(totalFrames), sampleRate: sampleRate)
+            let value = Float(sin(Double(phase))) * envelope * 0.9
+            pcmBuffer.floatChannelData?[0][frame] = value
+            pcmBuffer.floatChannelData?[1][frame] = value
+        }
+
+        output.buffer.write(pcmBuffer)
+        DLog("Calibration chirp injected into '\(output.device.name)'")
+
+        if needsStart {
+            let halUnit = output.halUnit
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    guard let self, !self.isRunning else { return }
+                    AudioOutputUnitStop(halUnit)
+                }
+            }
+        }
+    }
+
     /// Play a short 440Hz beep to ALL device ring buffers.
     func injectTestToneAll() {
         let needsStart = !isRunning
