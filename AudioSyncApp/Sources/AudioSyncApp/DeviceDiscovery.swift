@@ -39,7 +39,7 @@ final class DeviceDiscovery: ObservableObject {
         refreshDevices()
     }
 
-    nonisolated deinit {
+    deinit {
         // Remove the property listener before the object is freed to prevent
         // use-after-free in the CoreAudio callback.
         if let ptr = selfPointer {
