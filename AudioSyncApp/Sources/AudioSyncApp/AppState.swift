@@ -23,6 +23,7 @@ class AppState: ObservableObject {
     @Published var activeProfileName: String?
     @Published var masterVolume: Float = 1.0
     @Published var isAutoSyncing = false
+    @Published var habits: [String: DeviceHabit] = [:]  // Learned per-device habits
     private var cancellables = Set<AnyCancellable>()
 
     /// Human-readable description of the active capture method (for UI display).
@@ -37,6 +38,7 @@ class AppState: ObservableObject {
     private static let kProfilesKey = "com.audiosync.profiles"
     private static let kActiveProfileKey = "com.audiosync.activeProfile"
     private static let kMasterVolumeKey = "com.audiosync.masterVolume"
+    private static let kHabitsKey = "com.audiosync.habits"
 
     // MARK: - Init
 
@@ -93,6 +95,12 @@ class AppState: ObservableObject {
         $deviceOrder
             .dropFirst()
             .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.saveSettings() }
+            .store(in: &cancellables)
+
+        $habits
+            .dropFirst()
+            .debounce(for: .seconds(2.0), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.saveSettings() }
             .store(in: &cancellables)
     }
@@ -250,12 +258,15 @@ class AppState: ObservableObject {
         ensureSettingsExist(for: uid)
         deviceSettings[uid]?.delayMs = ms
         outputEngine.updateDelay(for: uid, ms: ms)
+        recordHabit(uid: uid)
+ // Learn user's delay preference
     }
 
     func updateVolume(_ uid: String, volume: Float) {
         ensureSettingsExist(for: uid)
         deviceSettings[uid]?.volume = volume
         outputEngine.updateVolume(for: uid, volume: volume)
+        recordHabit(uid: uid)  // Learn user's volume preference
     }
 
     func updateMute(_ uid: String, isMuted: Bool) {
@@ -311,6 +322,51 @@ class AppState: ObservableObject {
             deviceSettings[uid]?.treble = 0
             deviceSettings[uid]?.mid = 0
         }
+    }
+
+    // MARK: - Habit Learning
+
+    /// Record a user adjustment into the per-device habit tracker (EMA).
+    /// Called from updateDelay and updateVolume.
+    private func recordHabit(uid: String) {
+        guard let settings = deviceSettings[uid] else { return }
+        if habits[uid] == nil {
+            habits[uid] = DeviceHabit()
+        }
+        habits[uid]?.observe(volume: settings.volume, delay: settings.delayMs)
+    }
+
+    /// Apply learned habits to all devices where we have confident data.
+    /// Used as a complement to auto-sync: if the user consistently prefers a
+    /// certain delay/volume, restore it (especially on reconnect).
+    /// Returns UIDs that were updated.
+    @discardableResult
+    func applyLearnedHabits() -> [String] {
+        var updated: [String] = []
+        for (uid, habit) in habits where habit.isConfident {
+            guard let settings = deviceSettings[uid], settings.isEnabled else { continue }
+            let learnedVol = habit.volumeEMA
+            let learnedDelay = habit.delayEMA
+            // Only apply if significantly different from current
+            if abs(settings.volume - learnedVol) > 0.05 {
+                deviceSettings[uid]?.volume = learnedVol
+                outputEngine.updateVolume(for: uid, volume: learnedVol)
+            }
+            if abs(settings.delayMs - learnedDelay) > 5 {
+                deviceSettings[uid]?.delayMs = learnedDelay
+                outputEngine.updateDelay(for: uid, ms: learnedDelay)
+            }
+            updated.append(uid)
+        }
+        if !updated.isEmpty { saveSettings() }
+        return updated
+    }
+
+    /// Get the learned habit summary for a device (for UI display).
+    func habitSummary(for uid: String) -> String? {
+        guard let habit = habits[uid], habit.isConfident else { return nil }
+        return String(format: "Usually: %.0f%% vol, %.0fms delay (%d obs)",
+                      habit.volumeEMA * 100, habit.delayEMA, habit.observationCount)
     }
 
     // MARK: - Room Profiles
@@ -402,11 +458,34 @@ class AppState: ObservableObject {
         )
         let currentDelays: [String: Float] = deviceSettings.compactMapValues { $0.isEnabled ? $0.delayMs : nil }
         let compensated = outputEngine.applyAutoDelayCompensation(enabledUIDs: enabledUIDs, currentDelays: currentDelays)
-        for (uid, delayMs) in compensated {
+
+        // Cross-check with learned habits: if user consistently sets a device
+        // to a delay that differs from auto-sync's suggestion, prefer the habit.
+        // This prevents auto-sync from overriding intentional tuning.
+        var finalDelays = compensated
+        for (uid, autoDelay) in compensated {
+            if let habit = habits[uid], habit.isConfident {
+                let learnedDelay = habit.delayEMA
+                let drift = abs(autoDelay - learnedDelay)
+                // If auto-sync suggests 0 but user habitually uses >50ms, trust the habit
+                if autoDelay == 0 && learnedDelay > 50 {
+                    finalDelays[uid] = round(learnedDelay / 5.0) * 5.0
+                    DLog("[AutoSync] Habit override for '\(uid)': auto=\(autoDelay)ms → learned=\(learnedDelay)ms")
+                }
+                // If auto-sync and habit disagree by >100ms, split the difference
+                else if drift > 100 {
+                    let blended = (autoDelay + learnedDelay) / 2
+                    finalDelays[uid] = round(blended / 5.0) * 5.0
+                    DLog("[AutoSync] Blended for '\(uid)': auto=\(autoDelay)ms + learned=\(learnedDelay)ms → \(blended)ms")
+                }
+            }
+        }
+
+        for (uid, delayMs) in finalDelays {
             deviceSettings[uid]?.delayMs = delayMs
         }
         isAutoSyncing = false
-        return compensated
+        return finalDelays
     }
 
     // MARK: - VU Meters
@@ -470,7 +549,11 @@ class AppState: ObservableObject {
         }
         defaults.set(activeProfileName, forKey: Self.kActiveProfileKey)
         defaults.set(masterVolume, forKey: Self.kMasterVolumeKey)
-        DLog("[AppState] Settings saved (\(deviceSettings.count) devices, \(profiles.count) profiles)")
+        // Persist habits (learned device preferences)
+        if let encoded = try? JSONEncoder().encode(habits) {
+            defaults.set(encoded, forKey: Self.kHabitsKey)
+        }
+        DLog("[AppState] Settings saved (\(deviceSettings.count) devices, \(profiles.count) profiles, \(habits.count) habits)")
     }
 
     private func restoreSettings() {
@@ -492,6 +575,12 @@ class AppState: ObservableObject {
         if masterVolume <= 0 { masterVolume = 1.0 }
         // Apply master volume to engine
         outputEngine.setMasterVolume(masterVolume)
+        // Restore habits (learned device preferences)
+        if let data = defaults.data(forKey: Self.kHabitsKey),
+           let saved = try? JSONDecoder().decode([String: DeviceHabit].self, from: data) {
+            habits = saved
+            DLog("[AppState] Restored \(saved.count) device habits")
+        }
         // Auto-load active profile on launch
         if let name = activeProfileName, profiles[name] != nil {
             loadProfile(name: name)

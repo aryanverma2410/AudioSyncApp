@@ -206,6 +206,17 @@ struct ContentView: View {
             .disabled(!appState.isActive || appState.isAutoSyncing)
             .help("Measure latency and auto-compensate delays so all speakers sync")
 
+            Button {
+                appState.applyLearnedHabits()
+            } label: {
+                Label("Apply Learned", systemImage: "brain")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!appState.isActive)
+            .help("Restore your usual volume/delay settings learned from past adjustments")
+
             Separator()
 
             // Metronome
@@ -583,6 +594,14 @@ struct DeviceControlCard: View {
                             .background(Color.cyan.opacity(0.12))
                             .cornerRadius(3)
                     }
+                }
+
+                // Learned habit hint
+                if let hint = appState.habitSummary(for: device.uid) {
+                    Text(hint)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.orange.opacity(0.8))
+                        .lineLimit(1)
                 }
             }
 

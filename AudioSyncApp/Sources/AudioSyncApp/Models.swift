@@ -101,6 +101,65 @@ struct DeviceSettings: Equatable, Codable {
     static let maxDelayMs: Float = 1000
 }
 
+// MARK: - Device Habit (Learning)
+
+/// Tracks a single device's volume and delay habits via exponential moving average (EMA).
+/// Lightweight: ~24 bytes per device. Learns what the user *actually prefers* over time,
+/// then uses that to seed auto-sync and restore settings on reconnect.
+///
+/// EMA math: `newValue = α × observed + (1 - α) × oldValue`
+/// α = 0.2 gives ~5 observations to converge, smooth enough to ignore one-off tweaks.
+struct DeviceHabit: Codable, Equatable {
+    var volumeEMA: Float          // 0...1, learned preferred volume
+    var delayEMA: Float           // 0...maxDelayMs, learned preferred delay
+    var observationCount: Int     // how many data points we've seen
+    var lastObserved: Date?       // when the user last adjusted this device
+
+    /// Exponential moving average smoothing factor (0.2 = slow learner, steady)
+    static let alpha: Float = 0.2
+
+    /// Minimum observations before the EMA is considered "confident"
+    static let confidentThreshold: Int = 3
+
+    var isConfident: Bool { observationCount >= Self.confidentThreshold }
+
+    init(volumeEMA: Float = 0, delayEMA: Float = 0, observationCount: Int = 0, lastObserved: Date? = nil) {
+        self.volumeEMA = volumeEMA
+        self.delayEMA = delayEMA
+        self.observationCount = observationCount
+        self.lastObserved = lastObserved
+    }
+
+    /// Record a new volume observation and update the EMA.
+    mutating func observe(volume: Float) {
+        if observationCount == 0 {
+            volumeEMA = volume
+        } else {
+            volumeEMA = Self.alpha * volume + (1 - Self.alpha) * volumeEMA
+        }
+        observationCount += 1
+        lastObserved = Date()
+    }
+
+    /// Record a new delay observation and update the EMA.
+    mutating func observe(delay: Float) {
+        if observationCount == 0 {
+            delayEMA = delay
+        } else {
+            delayEMA = Self.alpha * delay + (1 - Self.alpha) * delayEMA
+        }
+        // Don't double-count — delay and volume often change together
+        // Only update lastObserved if it hasn't been set this turn
+        if lastObserved == nil { lastObserved = Date() }
+    }
+
+    /// Combined convenience: observe both volume and delay at once.
+    mutating func observe(volume: Float, delay: Float) {
+        observe(volume: volume)
+        observe(delay: delay)
+    }
+}
+
 // MARK: - Room Profile
 
 /// A saved snapshot of all device settings, order, and metronome BPM.
