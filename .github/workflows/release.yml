@@ -1,0 +1,144 @@
+name: Build & Release DMG
+
+on:
+  push:
+    tags:
+      - 'v*'   # Triggers on pushing tags like v1.0, v2.1.3
+  workflow_dispatch:  # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build Release Binary
+        working-directory: AudioSyncApp
+        run: |
+          swift build -c release
+          BINARY=".build/apple/Products/Release/AudioSyncApp"
+          if [ ! -f "$BINARY" ]; then
+            BINARY=".build/release/AudioSyncApp"
+          fi
+          echo "BINARY=$BINARY" >> "$GITHUB_ENV"
+          echo "Built binary: $BINARY"
+          ls -la "$BINARY"
+
+      - name: Create App Bundle
+        working-directory: AudioSyncApp
+        run: |
+          mkdir -p dist/AudioSync.app/Contents/MacOS
+          mkdir -p dist/AudioSync.app/Contents/Resources
+          mkdir -p dist/AudioSync.app/Contents/_CodeSignature
+
+          # Copy binary
+          cp "$BINARY" dist/AudioSync.app/Contents/MacOS/AudioSync
+
+          # Create Info.plist
+          cat > dist/AudioSync.app/Contents/Info.plist << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key>
+              <string>AudioSync</string>
+              <key>CFBundleDisplayName</key>
+              <string>AudioSync</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.audiosync.app</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${{ github.ref_name }}</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleExecutable</key>
+              <string>AudioSync</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>13.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>NSSupportsAutomaticGraphicsSwitching</key>
+              <true/>
+              <key>NSMicrophoneUsageDescription</key>
+              <string>AudioSync needs microphone access for acoustic delay calibration and system audio capture.</string>
+              <key>NSScreenCaptureUsageDescription</key>
+              <string>AudioSync needs screen recording access to capture system audio for routing to your speakers.</string>
+              <key>NSAudioCaptureUsageDescription</key>
+              <string>AudioSync needs audio capture access to stream system audio to your speakers.</string>
+          </dict>
+          </plist>
+          PLIST
+
+          # Create a simple app icon using the system waveform symbol
+          # (In production, you'd replace this with a proper .icns file)
+          echo "App bundle created:"
+          find dist/AudioSync.app -type f
+
+      - name: Create DMG
+        working-directory: AudioSyncApp
+        run: |
+          # Remove any previous DMG
+          rm -f AudioSync.dmg
+
+          # Create DMG with create-dmg
+          create-dmg 
+            --volname "AudioSync" 
+            --window-pos 200 120 
+            --window-size 600 400 
+            --icon-size 100 
+            --icon "AudioSync.app" 175 190 
+            --app-drop-link 425 190 
+            --hide-extension "AudioSync.app" 
+            AudioSync.dmg 
+            dist/
+
+          echo "DMG created:"
+          ls -lh AudioSync.dmg
+
+      - name: Upload DMG Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioSync-DMG
+          path: AudioSyncApp/AudioSync.dmg
+          retention-days: 90
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AudioSync ${{ github.ref_name }}
+          body: |
+            ## AudioSync ${{ github.ref_name }}
+
+            Multi-speaker audio routing app for macOS.
+
+            ### Installation
+            1. Download `AudioSync.dmg` below
+            2. Open the DMG
+            3. Drag **AudioSync.app** to your **Applications** folder
+            4. Open it (first time: right-click → Open, since it's unsigned)
+
+            ### Permissions needed on first use
+            - **Screen Recording** — to capture system audio
+            - **Microphone** — for acoustic delay calibration
+
+            ### What's new
+            - Per-speaker EQ (Bass/Treble/Mid)
+            - Speaker roles (Left/Right/Center)
+            - Room profiles with persistence
+            - Habit learning for volume/delay
+            - Acoustic calibration via mic
+            - Master volume control
+            - Metronome with per-speaker output
+
+            **Requires macOS 13+ (Ventura or later)**
+          files: AudioSyncApp/AudioSync.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
