@@ -33,72 +33,19 @@ jobs:
         run: |
           mkdir -p dist/AudioSync.app/Contents/MacOS
           mkdir -p dist/AudioSync.app/Contents/Resources
-          mkdir -p dist/AudioSync.app/Contents/_CodeSignature
-
-          # Copy binary
           cp "$BINARY" dist/AudioSync.app/Contents/MacOS/AudioSync
 
-          # Create Info.plist
-          cat > dist/AudioSync.app/Contents/Info.plist << 'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleName</key>
-              <string>AudioSync</string>
-              <key>CFBundleDisplayName</key>
-              <string>AudioSync</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.audiosync.app</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>CFBundleShortVersionString</key>
-              <string>${{ github.ref_name }}</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleExecutable</key>
-              <string>AudioSync</string>
-              <key>CFBundleIconFile</key>
-              <string>AppIcon</string>
-              <key>LSMinimumSystemVersion</key>
-              <string>13.0</string>
-              <key>NSHighResolutionCapable</key>
-              <true/>
-              <key>NSSupportsAutomaticGraphicsSwitching</key>
-              <true/>
-              <key>NSMicrophoneUsageDescription</key>
-              <string>AudioSync needs microphone access for acoustic delay calibration and system audio capture.</string>
-              <key>NSScreenCaptureUsageDescription</key>
-              <string>AudioSync needs screen recording access to capture system audio for routing to your speakers.</string>
-              <key>NSAudioCaptureUsageDescription</key>
-              <string>AudioSync needs audio capture access to stream system audio to your speakers.</string>
-          </dict>
-          </plist>
-          PLIST
+          # Write Info.plist using printf (heredoc + YAML indentation don't mix)
+          printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>CFBundleName</key><string>AudioSync</string>\n  <key>CFBundleDisplayName</key><string>AudioSync</string>\n  <key>CFBundleIdentifier</key><string>com.audiosync.app</string>\n  <key>CFBundleVersion</key><string>1</string>\n  <key>CFBundleShortVersionString</key><string>1.0</string>\n  <key>CFBundlePackageType</key><string>APPL</string>\n  <key>CFBundleExecutable</key><string>AudioSync</string>\n  <key>LSMinimumSystemVersion</key><string>13.0</string>\n  <key>NSHighResolutionCapable</key><true/>\n  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>\n  <key>NSMicrophoneUsageDescription</key><string>AudioSync needs microphone access for acoustic delay calibration and system audio capture.</string>\n  <key>NSScreenCaptureUsageDescription</key><string>AudioSync needs screen recording access to capture system audio for routing to your speakers.</string>\n  <key>NSAudioCaptureUsageDescription</key><string>AudioSync needs audio capture access to stream system audio to your speakers.</string>\n</dict>\n</plist>\n' > dist/AudioSync.app/Contents/Info.plist
 
-          # Create a simple app icon using the system waveform symbol
-          # (In production, you'd replace this with a proper .icns file)
           echo "App bundle created:"
           find dist/AudioSync.app -type f
 
       - name: Create DMG
         working-directory: AudioSyncApp
         run: |
-          # Remove any previous DMG
           rm -f AudioSync.dmg
-
-          # Create DMG with create-dmg
-          create-dmg 
-            --volname "AudioSync" 
-            --window-pos 200 120 
-            --window-size 600 400 
-            --icon-size 100 
-            --icon "AudioSync.app" 175 190 
-            --app-drop-link 425 190 
-            --hide-extension "AudioSync.app" 
-            AudioSync.dmg 
-            dist/
-
+          create-dmg --volname "AudioSync" --window-pos 200 120 --window-size 600 400 --icon-size 100 --icon "AudioSync.app" 175 190 --app-drop-link 425 190 --hide-extension "AudioSync.app" AudioSync.dmg dist/
           echo "DMG created:"
           ls -lh AudioSync.dmg
 
