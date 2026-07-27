@@ -191,6 +191,7 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(!appState.isActive)
+            .help("Play a test beep to all speakers to verify they're working")
 
             Button {
                 let result = appState.autoDelayCompensate()
@@ -254,6 +255,7 @@ struct ContentView: View {
                 ), in: 40...240, step: 5)
                     .font(.system(size: 10, design: .monospaced))
                     .controlSize(.mini)
+                    .help("Metronome tempo (BPM)")
             }
 
             Button {
@@ -310,6 +312,7 @@ struct ContentView: View {
                 .cornerRadius(6)
             }
             .buttonStyle(.plain)
+            .help(appState.isActive ? "Stop audio routing to all speakers" : "Start routing system audio to all speakers")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -780,6 +783,7 @@ struct DeviceControlCard: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             .labelsHidden()
+            .help(settings.isEnabled ? "Disable this speaker from routing" : "Enable this speaker for routing")
         }
     }
 
@@ -995,6 +999,7 @@ struct DeviceControlCard: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)
+            .help("Play a test tone on this speaker only")
 
             Spacer()
 
