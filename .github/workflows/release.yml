@@ -31,6 +31,14 @@ jobs:
           echo "Built binary: $BINARY"
           ls -la "$BINARY"
 
+      - name: Download BlackHole
+        working-directory: AudioSyncApp
+        run: |
+          mkdir -p dist
+          curl -L -o dist/BlackHole2ch.pkg "https://existential.audio/downloads/BlackHole2ch.v0.5.1.pkg"
+          echo "Downloaded BlackHole:"
+          ls -lh dist/BlackHole2ch.pkg
+
       - name: Create App Bundle
         working-directory: AudioSyncApp
         run: |
@@ -38,8 +46,15 @@ jobs:
           mkdir -p dist/AudioSync.app/Contents/Resources
           cp "$BINARY" dist/AudioSync.app/Contents/MacOS/AudioSync
 
+          # Copy icon if available
+          if [ -f Resources/AppIcon.icns ]; then
+            cp Resources/AppIcon.icns dist/AudioSync.app/Contents/Resources/AppIcon.icns
+          elif [ -f Resources/AppIcon.png ]; then
+            cp Resources/AppIcon.png dist/AudioSync.app/Contents/Resources/AppIcon.icns
+          fi
+
           # Write Info.plist using printf (heredoc + YAML indentation don't mix)
-          printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>CFBundleName</key><string>AudioSync</string>\n  <key>CFBundleDisplayName</key><string>AudioSync</string>\n  <key>CFBundleIdentifier</key><string>com.audiosync.app</string>\n  <key>CFBundleVersion</key><string>1</string>\n  <key>CFBundleShortVersionString</key><string>1.0</string>\n  <key>CFBundlePackageType</key><string>APPL</string>\n  <key>CFBundleExecutable</key><string>AudioSync</string>\n  <key>LSMinimumSystemVersion</key><string>13.0</string>\n  <key>NSHighResolutionCapable</key><true/>\n  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>\n  <key>NSMicrophoneUsageDescription</key><string>AudioSync needs microphone access for acoustic delay calibration and system audio capture.</string>\n  <key>NSScreenCaptureUsageDescription</key><string>AudioSync needs screen recording access to capture system audio for routing to your speakers.</string>\n  <key>NSAudioCaptureUsageDescription</key><string>AudioSync needs audio capture access to stream system audio to your speakers.</string>\n</dict>\n</plist>\n' > dist/AudioSync.app/Contents/Info.plist
+          printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>CFBundleName</key><string>AudioSync</string>\n  <key>CFBundleDisplayName</key><string>AudioSync</string>\n  <key>CFBundleIdentifier</key><string>com.audiosync.app</string>\n  <key>CFBundleVersion</key><string>1</string>\n  <key>CFBundleShortVersionString</key><string>1.0</string>\n  <key>CFBundlePackageType</key><string>APPL</string>\n  <key>CFBundleExecutable</key><string>AudioSync</string>\n  <key>CFBundleIconFile</key><string>AppIcon</string>\n  <key>LSMinimumSystemVersion</key><string>13.0</string>\n  <key>NSHighResolutionCapable</key><true/>\n  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>\n  <key>NSMicrophoneUsageDescription</key><string>AudioSync needs microphone access for acoustic delay calibration and system audio capture.</string>\n  <key>NSScreenCaptureUsageDescription</key><string>AudioSync needs screen recording access to capture system audio for routing to your speakers.</string>\n  <key>NSAudioCaptureUsageDescription</key><string>AudioSync needs audio capture access to stream system audio to your speakers.</string>\n</dict>\n</plist>\n' > dist/AudioSync.app/Contents/Info.plist
 
           echo "App bundle created:"
           find dist/AudioSync.app -type f
@@ -48,7 +63,7 @@ jobs:
         working-directory: AudioSyncApp
         run: |
           rm -f AudioSync.dmg
-          create-dmg --volname "AudioSync" --window-pos 200 120 --window-size 600 400 --icon-size 100 --icon "AudioSync.app" 175 190 --app-drop-link 425 190 --hide-extension "AudioSync.app" AudioSync.dmg dist/
+          create-dmg --volname "AudioSync" --window-pos 200 120 --window-size 600 400 --icon-size 100 --icon "AudioSync.app" 100 190 --icon "BlackHole2ch.pkg" 350 190 --app-drop-link 425 190 --hide-extension "AudioSync.app" AudioSync.dmg dist/
           echo "DMG created:"
           ls -lh AudioSync.dmg
 
@@ -72,8 +87,10 @@ jobs:
             ### Installation
             1. Download `AudioSync.dmg` below
             2. Open the DMG
-            3. Drag **AudioSync.app** to your **Applications** folder
-            4. Open it (first time: right-click → Open, since it's unsigned)
+            3. **Install BlackHole first:** Double-click `BlackHole2ch.pkg` in the DMG
+            4. Drag **AudioSync.app** to your **Applications** folder
+            5. Open AudioSync → Click **Setup** → Click **Start Setup** (auto-configures everything)
+            6. First time opening AudioSync: right-click → Open (unsigned app gatekeeper bypass)
 
             ### Permissions needed on first use
             - **Screen Recording** — to capture system audio

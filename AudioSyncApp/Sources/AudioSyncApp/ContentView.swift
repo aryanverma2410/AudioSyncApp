@@ -6,6 +6,7 @@ struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @State private var newProfileName = ""
     @State private var showSaveProfileSheet = false
+    @State private var showSetupWizard = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,6 +34,9 @@ struct ContentView: View {
                     .hidden()
             }
         )
+        .sheet(isPresented: $showSetupWizard) {
+            SetupWizardSheet(setupAssistant: appState.setupAssistant, isPresented: $showSetupWizard)
+        }
     }
 
     private func selectProfileAt(_ index: Int) {
@@ -289,6 +293,19 @@ struct ContentView: View {
             .controlSize(.small)
             .disabled(!appState.isActive)
             .help("Reset all speakers' EQ to flat")
+
+            // Setup wizard button (shows when not fully set up)
+            if !appState.setupAssistant.isFullySetup {
+                Button {
+                    showSetupWizard = true
+                } label: {
+                    Label("Setup", systemImage: "gear.badge.checkmark")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("Run first-time setup: install BlackHole, create Multi-Output device")
+            }
 
             Separator()
 
@@ -1013,6 +1030,160 @@ struct DeviceControlCard: View {
                     .background(Color.red.opacity(0.1))
                     .cornerRadius(4)
             }
+        }
+    }
+}
+
+// MARK: - Setup Wizard Sheet
+
+struct SetupWizardSheet: View {
+    @ObservedObject var setupAssistant: SetupAssistant
+    @Binding var isPresented: Bool
+    @State private var isRunning = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            // Header
+            VStack(spacing: 8) {
+                Image(systemName: "hifispeaker.and.signal")
+                    .font(.system(size: 40))
+                    .foregroundColor(.accentColor)
+                Text("AudioSync Setup")
+                    .font(.title2.bold())
+                Text("This wizard will configure your Mac for multi-speaker audio routing.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            // Steps overview
+            VStack(alignment: .leading, spacing: 12) {
+                SetupStepRow(
+                    number: 1,
+                    title: "Install BlackHole",
+                    description: "Free virtual audio driver for system audio capture",
+                    isDone: setupAssistant.findBlackHoleDevice() != nil,
+                    isActive: setupAssistant.state == .installingBlackHole
+                )
+                SetupStepRow(
+                    number: 2,
+                    title: "Create Multi-Output Device",
+                    description: "Routes audio to all speakers simultaneously",
+                    isDone: setupAssistant.findAggregateDevice() != nil,
+                    isActive: setupAssistant.state == .creatingAggregate
+                )
+                SetupStepRow(
+                    number: 3,
+                    title: "Set as Default Output",
+                    description: "Makes the Multi-Output your Mac's audio output",
+                    isDone: setupAssistant.state == .done,
+                    isActive: setupAssistant.state == .settingDefault
+                )
+            }
+            .padding()
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
+
+            // Progress / Status
+            if setupAssistant.state != .notStarted {
+                VStack(spacing: 8) {
+                    if case .failed(let msg) = setupAssistant.state {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
+                            Text(msg)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                    } else if setupAssistant.state == .done {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Setup complete!")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                    } else {
+                        ProgressView(value: setupAssistant.progress)
+                            .progressViewStyle(.linear)
+                        Text(setupAssistant.statusMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            // Buttons
+            HStack(spacing: 12) {
+                if setupAssistant.state == .done {
+                    Button("Done") {
+                        isPresented = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else if case .failed(_) = setupAssistant.state {
+                    Button("Close") {
+                        isPresented = false
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Retry") {
+                        Task { await setupAssistant.runSetup() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Cancel") {
+                        isPresented = false
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isRunning)
+
+                    Button("Start Setup") {
+                        isRunning = true
+                        Task { await setupAssistant.runSetup() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isRunning && setupAssistant.state != .notStarted)
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+    }
+}
+
+struct SetupStepRow: View {
+    let number: Int
+    let title: String
+    let description: String
+    let isDone: Bool
+    let isActive: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(isDone ? Color.green : (isActive ? Color.accentColor : Color.gray.opacity(0.3)))
+                    .frame(width: 28, height: 28)
+                if isDone {
+                    Image(systemName: "checkmark")
+                        .font(.caption.bold())
+                        .foregroundColor(.white)
+                } else if isActive {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Text("\(number)")
+                        .font(.caption.bold())
+                        .foregroundColor(.secondary)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.bold())
+                Text(description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
         }
     }
 }

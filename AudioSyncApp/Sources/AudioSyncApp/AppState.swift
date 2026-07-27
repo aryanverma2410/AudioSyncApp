@@ -25,6 +25,7 @@ class AppState: ObservableObject {
     @Published var isAutoSyncing = false
     @Published var habits: [String: DeviceHabit] = [:]  // Learned per-device habits
     let calibrator = AcousticCalibrator()
+    let setupAssistant = SetupAssistant()
     private var cancellables = Set<AnyCancellable>()
 
     /// Human-readable description of the active capture method (for UI display).
