@@ -369,15 +369,33 @@ class AppState: ObservableObject {
 
     private var sleepTimer: Timer?
 
+    /// Stored master volume before fade-out began (restored on cancel/expiry).
+    private var preFadeMasterVolume: Float? = nil
+
     func setSleepTimer(minutes: Int?) {
         sleepTimer?.invalidate()
+        // Restore volume if cancelling while fading
+        if let saved = preFadeMasterVolume {
+            outputEngine.setMasterVolume(saved)
+            preFadeMasterVolume = nil
+        }
         if let mins = minutes {
             sleepTimerMinutes = mins
             sleepTimerRemaining = mins * 60
+            preFadeMasterVolume = masterVolume
             sleepTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] t in
                 Task { @MainActor [weak self] in
                     guard let self else { t.invalidate(); return }
                     self.sleepTimerRemaining -= 1
+
+                    // Gradual fade in last 2 minutes (120 seconds)
+                    let fadeSeconds: Float = 120
+                    if Float(self.sleepTimerRemaining) <= fadeSeconds, let savedVol = self.preFadeMasterVolume {
+                        let progress = Float(self.sleepTimerRemaining) / fadeSeconds // 1.0 → 0.0
+                        let fadedVol = savedVol * progress
+                        self.outputEngine.setMasterVolume(fadedVol)
+                    }
+
                     if self.sleepTimerRemaining <= 0 {
                         self.stop()
                         self.sleepTimerMinutes = nil
@@ -390,6 +408,7 @@ class AppState: ObservableObject {
         } else {
             sleepTimerMinutes = nil
             sleepTimerRemaining = 0
+            preFadeMasterVolume = nil
         }
     }
 
