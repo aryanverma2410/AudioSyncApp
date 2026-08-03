@@ -8,7 +8,8 @@ import Darwin
 
 private let kEngineSampleRate: Double = 48000
 private let kEngineChannels: UInt32 = 2
-private let kSafetyFrames: Int = 4096        // ~85ms at 48kHz — BT codec headroom
+private let kSafetyFrames: Int = 4096        // ~85ms at 48kHz — wired device headroom
+private let kSafetyFramesBT: Int = 8192       // ~170ms at 48kHz — BT codec headroom (100-300ms latency)
 private let kRingBufferPower: Int = 19       // 2^19 = 524288 frames ≈ 10.9s at 48kHz
 private let kMaxDelayMs: Float = 1000
 
@@ -98,20 +99,21 @@ final class DelayedRingBuffer: @unchecked Sendable {
     private var _delayFrames: Int = 0
 
     // Safety margin: minimum distance between write and read (prevents underrun on BT)
-    // BT codecs add 100-200ms latency; kSafetyFrames ≈ 85ms at 48kHz gives enough headroom.
-    private let safetyFrames: Int = kSafetyFrames
+    // BT codecs add 100-300ms latency; kSafetyFramesBT ≈ 170ms at 48kHz gives enough headroom.
+    private let safetyFrames: Int
 
     private(set) var _writeCount: Int = 0
     private(set) var _readCount: Int = 0
     private(set) var _lastABLCount: Int = 0
 
-    init(capacitySeconds: Double = 4.0, sampleRate: Double = kEngineSampleRate) {
+    init(capacitySeconds: Double = 4.0, sampleRate: Double = kEngineSampleRate, isBluetooth: Bool = false) {
         // Round up to next power of 2 for fast modulo
         let rawFrames = Int(capacitySeconds * sampleRate)
         var n = 1
         while n < rawFrames { n *= 2 }
         self.frameCount = n
         self.frameMask = n - 1
+        self.safetyFrames = isBluetooth ? kSafetyFramesBT : kSafetyFrames
         self.buffer = .allocate(capacity: n * channels)
         self.buffer.initialize(repeating: 0, count: n * channels)
     }
@@ -164,27 +166,31 @@ final class DelayedRingBuffer: @unchecked Sendable {
             _readPos = max(wp - totalBehind, 0)
         }
 
-        // Enforce delay: if reader got too close to writer, push it back (delay increased)
-        // OR if reader is too far behind writer, snap it forward (delay decreased — instant response)
-        if wp - _readPos < totalBehind {
-            _readPos = wp - totalBehind
-        } else if wp - _readPos > totalBehind + Int(frames) * 2 {
-            // Reader is further behind than needed — jump forward (delay was reduced)
-            _readPos = wp - totalBehind
-        }
-
         var rp = _readPos
 
-        // Catch-up: if reader fell too far behind (writer overtook the unread region),
-        // snap read position forward to avoid reading stale/wrapped data.
+        // Gradual drift correction: nudge ±1 frame per callback to smoothly converge
+        // to the target distance (totalBehind). Hard snapping causes audio discontinuities.
+        let currentDist = wp - rp
+        if currentDist < totalBehind {
+            // Reader too close to writer — skip 1 frame forward (slowly back off)
+            rp += 1
+        } else if currentDist > totalBehind + Int(frames) * 2 {
+            // Reader too far behind — skip 1 frame (slowly catch up)
+            rp += 1
+        }
+
+        // Catastrophic overrun: reader fell behind by more than the entire ring buffer.
+        // Only here do we hard-snap to avoid reading stale/wrapped data.
         if wp - rp > frameCount {
             rp = wp - safetyFrames
         }
 
-        // Underrun check: not enough data written yet
+        // Underrun recovery: fill with silence and resync read position.
+        // The next callback will pick up from the corrected position seamlessly.
         if wp - rp < Int(frames) {
             DelayedRingBuffer.fillSilence(ioData, frames: frames)
-            _readPos = max(rp, wp - totalBehind)
+            // Snap read position to safe distance — prevents cascade of underruns
+            _readPos = max(wp - totalBehind, 0)
             return
         }
 
@@ -249,10 +255,22 @@ private let _levelLookup = ThreadSafeLookup<String, Float>()  // VU meter: per-d
 private let _bassLookup = ThreadSafeLookup<String, Float>()
 private let _trebleLookup = ThreadSafeLookup<String, Float>()
 private let _midLookup = ThreadSafeLookup<String, Float>()
-// Speaker role: 0=both, 1=left, 2=center, 3=right (stored as Float for ThreadSafeLookup)
-private let _roleLookup = ThreadSafeLookup<String, Float>()
 // Master volume multiplier (applied on top of individual volumes in render callback)
 private let _masterVolume = AtomicFloat(1.0)
+
+// MARK: - Audio Mode (global: normal, karaoke, vocal-boost)
+
+enum AudioMode: Int, Sendable {
+    case normal = 0
+    case karaoke = 1
+    case vocalBoost = 2
+}
+
+// Global audio mode — affects all devices
+private let _audioMode = AtomicFloat(0)  // 0=normal, 1=karaoke, 2=vocalBoost
+
+// CPU overload flag — set when CPU > 80%, cleared when it drops below 60%
+private let _cpuOverloadFlag = AtomicFloat(0)
 
 // MARK: - Simple Biquad (1st-order shelf for bass/treble, peaking for mid)
 
@@ -733,22 +751,16 @@ final class MultiOutputEngine: ObservableObject {
         }
     }
 
-    func updateRole(for deviceUID: String, role: SpeakerRole) {
-        let rawValue: Float
-        switch role {
-        case .both: rawValue = 0
-        case .left: rawValue = 1
-        case .center: rawValue = 2
-        case .right: rawValue = 3
-        }
-        _roleLookup.set(deviceUID, rawValue)
-    }
-
     /// Set the master volume multiplier (0...1). Applied on top of individual
     /// device volumes in the HAL render callback. This lets users scale all
     /// speakers proportionally without changing individual levels.
     func setMasterVolume(_ vol: Float) {
         _masterVolume.store(min(max(vol, 0), 1))
+    }
+
+    /// Set the global audio mode (normal, karaoke, vocal-boost).
+    func setAudioMode(_ mode: AudioMode) {
+        _audioMode.store(Float(mode.rawValue))
     }
 
     /// Reset all device EQ bands to flat (0). Returns the list of affected UIDs.
@@ -863,7 +875,7 @@ final class MultiOutputEngine: ObservableObject {
 
         DLog("Adding device '\(device.name)' (transport=\(device.transportType.rawValue), id=\(device.id), sr=\(device.sampleRate))...")
 
-        let ringBuffer = DelayedRingBuffer()
+        let ringBuffer = DelayedRingBuffer(isBluetooth: device.transportType.isBluetooth)
         ringBuffer.setDelay(ms: settings.delayMs, sampleRate: engineFormat.sampleRate)
 
         // Register in lookup tables BEFORE setting render callback
@@ -916,7 +928,6 @@ final class MultiOutputEngine: ObservableObject {
         _bassLookup.remove(deviceUID)
         _trebleLookup.remove(deviceUID)
         _midLookup.remove(deviceUID)
-        _roleLookup.remove(deviceUID)
         _eqLookup.remove(deviceUID)
         deviceOutputs.removeValue(forKey: deviceUID)
         activeDeviceCount = deviceOutputs.count
@@ -1101,6 +1112,13 @@ final class MultiOutputEngine: ObservableObject {
             return noErr
         }
 
+        // CPU overload guard: if CPU usage is critical, output silence to prevent
+        // audio glitches from missed deadlines. The cpuTimer updates cpuUsage every 0.5s.
+        if _cpuOverloadFlag.load() > 0 {
+            DelayedRingBuffer.fillSilence(ioData, frames: inNumberFrames)
+            return noErr
+        }
+
         // Look up ring buffer and volume — if either is missing, output silence
         guard let rb = _bufferLookup.get(uid) else {
             DelayedRingBuffer.fillSilence(ioData, frames: inNumberFrames)
@@ -1123,40 +1141,32 @@ final class MultiOutputEngine: ObservableObject {
             DelayedRingBuffer.applyVolume(vol, to: ioData, frames: inNumberFrames)
         }
 
-        // Apply EQ (bass/treble/mid) if any band is non-zero
-        let bass = _bassLookup.get(uid) ?? 0
-        let treble = _trebleLookup.get(uid) ?? 0
-        let mid = _midLookup.get(uid) ?? 0
-        let hasEQ = abs(bass) > 0.01 || abs(treble) > 0.01 || abs(mid) > 0.01
-        if hasEQ, let eq = _eqLookup.get(uid) {
-            let abl2 = UnsafeMutableAudioBufferListPointer(ioData)
-            for buf in abl2 {
-                guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
-                let ptr = data.assumingMemoryBound(to: Float.self)
-                let count = Int(buf.mDataByteSize / UInt32(MemoryLayout<Float>.size))
-                for i in 0..<count {
-                    ptr[i] = eq.process(ptr[i], bass: bass, treble: treble, mid: mid)
-                }
-            }
-        }
-
-        // Apply speaker role panning (mute one channel for Left/Right, mix for Center)
-        let roleRaw = _roleLookup.get(uid) ?? 0
-        if roleRaw > 0.5 { // not "both"
-            let abl3 = UnsafeMutableAudioBufferListPointer(ioData)
-            if abl3.count >= 2, let leftData = abl3[0].mData, let rightData = abl3[1].mData {
+        // Apply audio mode processing (karaoke center-cancel, vocal boost, or EQ)
+        let modeRaw = _audioMode.load()
+        let abl2 = UnsafeMutableAudioBufferListPointer(ioData)
+        if modeRaw == 1 {  // karaoke: center-channel cancellation (L-R subtraction)
+            // Subtract center-panned content (typically vocals) from both channels.
+            // Uses a gentle low-pass on the difference to preserve stereo width.
+            if abl2.count >= 2, let leftData = abl2[0].mData, let rightData = abl2[1].mData {
                 let leftPtr = leftData.assumingMemoryBound(to: Float.self)
                 let rightPtr = rightData.assumingMemoryBound(to: Float.self)
-                let count = Int(abl3[0].mDataByteSize / UInt32(MemoryLayout<Float>.size))
-                if roleRaw < 1.5 { // Left only
-                    for i in 0..<count { rightPtr[i] = leftPtr[i] }
-                } else if roleRaw < 2.5 { // Center: average both channels
+                let count = Int(abl2[0].mDataByteSize / UInt32(MemoryLayout<Float>.size))
+                for i in 0..<count {
+                    let diff = (leftPtr[i] - rightPtr[i]) * 0.5
+                    leftPtr[i] = diff
+                    rightPtr[i] = diff
+                }
+            }
+        } else if modeRaw == 2 {  // vocal boost: amplify mid frequencies
+            if let eq = _eqLookup.get(uid) {
+                for buf in abl2 {
+                    guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
+                    let ptr = data.assumingMemoryBound(to: Float.self)
+                    let count = Int(buf.mDataByteSize / UInt32(MemoryLayout<Float>.size))
                     for i in 0..<count {
-                        let avg = (leftPtr[i] + rightPtr[i]) * 0.5
-                        leftPtr[i] = avg; rightPtr[i] = avg
+                        // Boost mid (vocals) with +0.7, leave bass/treble flat
+                        ptr[i] = eq.process(ptr[i], bass: 0, treble: 0, mid: 0.7)
                     }
-                } else { // Right only
-                    for i in 0..<count { leftPtr[i] = rightPtr[i] }
                 }
             }
         }
@@ -1240,6 +1250,12 @@ final class MultiOutputEngine: ObservableObject {
             let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
             if let value = Double(output.components(separatedBy: .whitespaces).first ?? "0") {
                 cpuUsage = min(value, 100.0)
+                if cpuUsage > 80 {
+                    _cpuOverloadFlag.store(1)
+                    DLog("[CPU Guard] Overload detected (\(String(format: "%.1f", cpuUsage))%) — outputting silence")
+                } else if cpuUsage < 60 {
+                    _cpuOverloadFlag.store(0)
+                }
             } else {
                 cpuUsage = 0
             }

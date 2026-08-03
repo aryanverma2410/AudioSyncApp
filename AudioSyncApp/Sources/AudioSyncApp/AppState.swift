@@ -21,9 +21,10 @@ class AppState: ObservableObject {
     @Published var deviceOrder: [String] = []  // Device UIDs in display order
     @Published var profiles: [String: RoomProfile] = [:]
     @Published var activeProfileName: String?
+    @Published var isProfileModified = false
     @Published var masterVolume: Float = 1.0
+    @Published var audioMode: AudioMode = .normal
     @Published var isAutoSyncing = false
-    @Published var habits: [String: DeviceHabit] = [:]  // Learned per-device habits
     let calibrator = AcousticCalibrator()
     let setupAssistant = SetupAssistant()
     private var cancellables = Set<AnyCancellable>()
@@ -40,7 +41,9 @@ class AppState: ObservableObject {
     private static let kProfilesKey = "com.audiosync.profiles"
     private static let kActiveProfileKey = "com.audiosync.activeProfile"
     private static let kMasterVolumeKey = "com.audiosync.masterVolume"
-    private static let kHabitsKey = "com.audiosync.habits"
+
+    /// Snapshot of the profile when it was loaded, used to detect modifications.
+    private var loadedProfileSnapshot: RoomProfile?
 
     // MARK: - Init
 
@@ -100,12 +103,6 @@ class AppState: ObservableObject {
         $deviceOrder
             .dropFirst()
             .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in self?.saveSettings() }
-            .store(in: &cancellables)
-
-        $habits
-            .dropFirst()
-            .debounce(for: .seconds(2.0), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.saveSettings() }
             .store(in: &cancellables)
     }
@@ -223,6 +220,7 @@ class AppState: ObservableObject {
     func toggleDevice(_ uid: String, enabled: Bool) {
         ensureSettingsExist(for: uid)
         deviceSettings[uid]?.isEnabled = enabled
+        checkProfileModified()
 
         if enabled {
             // Find the device and add it
@@ -251,6 +249,9 @@ class AppState: ObservableObject {
             // New device — add with default settings
             let settings = defaultSettings(for: device)
             deviceSettings[device.uid] = settings
+            if device.transportType.isBluetooth {
+                DLog("[AppState] BT auto-reconnect: '\(device.name)' detected, resuming routing")
+            }
             DLog("[AppState] Auto-adding new device '\(device.name)' to routing")
             
             if settings.isEnabled {
@@ -263,46 +264,21 @@ class AppState: ObservableObject {
         ensureSettingsExist(for: uid)
         deviceSettings[uid]?.delayMs = ms
         outputEngine.updateDelay(for: uid, ms: ms)
-        recordHabit(uid: uid)
- // Learn user's delay preference
+        checkProfileModified()
     }
 
     func updateVolume(_ uid: String, volume: Float) {
         ensureSettingsExist(for: uid)
         deviceSettings[uid]?.volume = volume
         outputEngine.updateVolume(for: uid, volume: volume)
-        recordHabit(uid: uid)  // Learn user's volume preference
+        checkProfileModified()
     }
 
     func updateMute(_ uid: String, isMuted: Bool) {
         ensureSettingsExist(for: uid)
         deviceSettings[uid]?.isMuted = isMuted
         outputEngine.updateMute(for: uid, isMuted: isMuted)
-    }
-
-    func updateEQ(_ uid: String, bass: Float, treble: Float, mid: Float) {
-        ensureSettingsExist(for: uid)
-        deviceSettings[uid]?.bass = bass
-        deviceSettings[uid]?.treble = treble
-        deviceSettings[uid]?.mid = mid
-        outputEngine.updateEQ(for: uid, bass: bass, treble: treble, mid: mid)
-    }
-
-    func updateRole(_ uid: String, role: SpeakerRole) {
-        ensureSettingsExist(for: uid)
-        deviceSettings[uid]?.role = role
-        outputEngine.updateRole(for: uid, role: role)
-    }
-
-    /// Normalize all enabled speakers to the same volume (uses the average of current volumes)
-    func normalizeVolumes() {
-        let enabledSettings = deviceSettings.filter { $0.value.isEnabled && !$0.value.isMuted }
-        guard enabledSettings.count > 1 else { return }
-        let avgVolume = enabledSettings.values.map { $0.volume }.reduce(0, +) / Float(enabledSettings.count)
-        for (uid, _) in enabledSettings {
-            deviceSettings[uid]?.volume = avgVolume
-            outputEngine.updateVolume(for: uid, volume: avgVolume)
-        }
+        checkProfileModified()
     }
 
     /// Set all enabled, non-muted devices to a specific volume level.
@@ -311,6 +287,7 @@ class AppState: ObservableObject {
             deviceSettings[uid]?.volume = targetVolume
             outputEngine.updateVolume(for: uid, volume: targetVolume)
         }
+        checkProfileModified()
     }
 
     /// Set master volume (proportionally scales all speakers).
@@ -319,59 +296,21 @@ class AppState: ObservableObject {
         outputEngine.setMasterVolume(level)
     }
 
-    /// Reset all speakers' EQ to flat.
-    func resetAllEQ() {
-        outputEngine.resetAllEQ()
-        for uid in deviceSettings.keys {
-            deviceSettings[uid]?.bass = 0
-            deviceSettings[uid]?.treble = 0
-            deviceSettings[uid]?.mid = 0
-        }
+    func setAudioMode(_ mode: AudioMode) {
+        audioMode = mode
+        outputEngine.setAudioMode(mode)
     }
 
-    // MARK: - Habit Learning
+    // MARK: - Profile Modification Detection
 
-    /// Record a user adjustment into the per-device habit tracker (EMA).
-    /// Called from updateDelay and updateVolume.
-    private func recordHabit(uid: String) {
-        guard let settings = deviceSettings[uid] else { return }
-        if habits[uid] == nil {
-            habits[uid] = DeviceHabit()
+    /// Marks the active profile as modified if current settings differ from the loaded snapshot.
+    private func checkProfileModified() {
+        guard let snapshot = loadedProfileSnapshot else { return }
+        if deviceSettings != snapshot.deviceSettings
+            || deviceOrder != snapshot.deviceOrder
+            || outputEngine.metronomeBPM != snapshot.metronomeBPM {
+            isProfileModified = true
         }
-        habits[uid]?.observe(volume: settings.volume, delay: settings.delayMs)
-    }
-
-    /// Apply learned habits to all devices where we have confident data.
-    /// Used as a complement to auto-sync: if the user consistently prefers a
-    /// certain delay/volume, restore it (especially on reconnect).
-    /// Returns UIDs that were updated.
-    @discardableResult
-    func applyLearnedHabits() -> [String] {
-        var updated: [String] = []
-        for (uid, habit) in habits where habit.isConfident {
-            guard let settings = deviceSettings[uid], settings.isEnabled else { continue }
-            let learnedVol = habit.volumeEMA
-            let learnedDelay = habit.delayEMA
-            // Only apply if significantly different from current
-            if abs(settings.volume - learnedVol) > 0.05 {
-                deviceSettings[uid]?.volume = learnedVol
-                outputEngine.updateVolume(for: uid, volume: learnedVol)
-            }
-            if abs(settings.delayMs - learnedDelay) > 5 {
-                deviceSettings[uid]?.delayMs = learnedDelay
-                outputEngine.updateDelay(for: uid, ms: learnedDelay)
-            }
-            updated.append(uid)
-        }
-        if !updated.isEmpty { saveSettings() }
-        return updated
-    }
-
-    /// Get the learned habit summary for a device (for UI display).
-    func habitSummary(for uid: String) -> String? {
-        guard let habit = habits[uid], habit.isConfident else { return nil }
-        return String(format: "Usually: %.0f%% vol, %.0fms delay (%d obs)",
-                      habit.volumeEMA * 100, habit.delayEMA, habit.observationCount)
     }
 
     // MARK: - Room Profiles
@@ -387,6 +326,8 @@ class AppState: ObservableObject {
         )
         profiles[name] = profile
         activeProfileName = name
+        isProfileModified = false
+        loadedProfileSnapshot = profile
         saveSettings()
     }
 
@@ -397,13 +338,13 @@ class AppState: ObservableObject {
         deviceOrder = profile.deviceOrder
         outputEngine.setMetronomeBPM(profile.metronomeBPM)
         activeProfileName = name
+        isProfileModified = false
+        loadedProfileSnapshot = profile
         // Re-apply settings to the engine if active
         if isActive {
             for (uid, settings) in deviceSettings where settings.isEnabled {
                 outputEngine.updateVolume(for: uid, volume: settings.volume)
                 outputEngine.updateDelay(for: uid, ms: settings.delayMs)
-                outputEngine.updateEQ(for: uid, bass: settings.bass, treble: settings.treble, mid: settings.mid)
-                outputEngine.updateRole(for: uid, role: settings.role)
             }
         }
     }
@@ -438,6 +379,7 @@ class AppState: ObservableObject {
 
     func moveDevice(from source: IndexSet, to destination: Int) {
         deviceOrder.move(fromOffsets: source, toOffset: destination)
+        checkProfileModified()
     }
 
     /// Start acoustic calibration using the MacBook mic.
@@ -483,33 +425,11 @@ class AppState: ObservableObject {
         let currentDelays: [String: Float] = deviceSettings.compactMapValues { $0.isEnabled ? $0.delayMs : nil }
         let compensated = outputEngine.applyAutoDelayCompensation(enabledUIDs: enabledUIDs, currentDelays: currentDelays)
 
-        // Cross-check with learned habits: if user consistently sets a device
-        // to a delay that differs from auto-sync's suggestion, prefer the habit.
-        // This prevents auto-sync from overriding intentional tuning.
-        var finalDelays = compensated
-        for (uid, autoDelay) in compensated {
-            if let habit = habits[uid], habit.isConfident {
-                let learnedDelay = habit.delayEMA
-                let drift = abs(autoDelay - learnedDelay)
-                // If auto-sync suggests 0 but user habitually uses >50ms, trust the habit
-                if autoDelay == 0 && learnedDelay > 50 {
-                    finalDelays[uid] = round(learnedDelay / 5.0) * 5.0
-                    DLog("[AutoSync] Habit override for '\(uid)': auto=\(autoDelay)ms → learned=\(learnedDelay)ms")
-                }
-                // If auto-sync and habit disagree by >100ms, split the difference
-                else if drift > 100 {
-                    let blended = (autoDelay + learnedDelay) / 2
-                    finalDelays[uid] = round(blended / 5.0) * 5.0
-                    DLog("[AutoSync] Blended for '\(uid)': auto=\(autoDelay)ms + learned=\(learnedDelay)ms → \(blended)ms")
-                }
-            }
-        }
-
-        for (uid, delayMs) in finalDelays {
+        for (uid, delayMs) in compensated {
             deviceSettings[uid]?.delayMs = delayMs
         }
         isAutoSyncing = false
-        return finalDelays
+        return compensated
     }
 
     // MARK: - VU Meters
@@ -573,11 +493,7 @@ class AppState: ObservableObject {
         }
         defaults.set(activeProfileName, forKey: Self.kActiveProfileKey)
         defaults.set(masterVolume, forKey: Self.kMasterVolumeKey)
-        // Persist habits (learned device preferences)
-        if let encoded = try? JSONEncoder().encode(habits) {
-            defaults.set(encoded, forKey: Self.kHabitsKey)
-        }
-        DLog("[AppState] Settings saved (\(deviceSettings.count) devices, \(profiles.count) profiles, \(habits.count) habits)")
+        DLog("[AppState] Settings saved (\(deviceSettings.count) devices, \(profiles.count) profiles)")
     }
 
     private func restoreSettings() {
@@ -599,12 +515,6 @@ class AppState: ObservableObject {
         if masterVolume <= 0 { masterVolume = 1.0 }
         // Apply master volume to engine
         outputEngine.setMasterVolume(masterVolume)
-        // Restore habits (learned device preferences)
-        if let data = defaults.data(forKey: Self.kHabitsKey),
-           let saved = try? JSONDecoder().decode([String: DeviceHabit].self, from: data) {
-            habits = saved
-            DLog("[AppState] Restored \(saved.count) device habits")
-        }
         // Auto-load active profile on launch
         if let name = activeProfileName, profiles[name] != nil {
             loadProfile(name: name)
