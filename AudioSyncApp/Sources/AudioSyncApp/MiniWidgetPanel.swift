@@ -42,6 +42,24 @@ struct MiniWidgetView: View {
             }
             .buttonStyle(.plain)
 
+            // Restart sync (only when active)
+            if appState.isActive {
+                Button {
+                    Task { await appState.restartRouting() }
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.clockwise")
+                        Text("Restart Sync")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 5)
+                    .background(Color.orange.opacity(0.15))
+                    .foregroundColor(.orange)
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+            }
+
             // Master volume
             HStack(spacing: 6) {
                 Image(systemName: "speaker.wave.2.fill")
