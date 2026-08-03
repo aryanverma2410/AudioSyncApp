@@ -120,7 +120,7 @@ struct MiniWidgetView: View {
 class MiniWidgetPanelController: NSPanel {
     static let shared = MiniWidgetPanelController()
 
-    init() {
+    private init() {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 180),
             styleMask: [.borderless, .nonactivatingPanel],

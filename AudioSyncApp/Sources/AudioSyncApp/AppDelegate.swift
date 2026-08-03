@@ -2,7 +2,6 @@ import Cocoa
 import SwiftUI
 import ServiceManagement
 import Carbon
-import CoreWLAN
 
 // MARK: - App Delegate
 

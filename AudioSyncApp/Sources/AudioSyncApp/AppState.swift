@@ -376,7 +376,7 @@ class AppState: ObservableObject {
         sleepTimer?.invalidate()
         // Restore volume if cancelling while fading
         if let saved = preFadeMasterVolume {
-            outputEngine.setMasterVolume(saved)
+            setMasterVolume(saved)  // syncs both @Published + engine
             preFadeMasterVolume = nil
         }
         if let mins = minutes {
@@ -392,12 +392,11 @@ class AppState: ObservableObject {
                     let fadeSeconds: Float = 120
                     if Float(self.sleepTimerRemaining) <= fadeSeconds, let savedVol = self.preFadeMasterVolume {
                         let progress = Float(self.sleepTimerRemaining) / fadeSeconds // 1.0 → 0.0
-                        let fadedVol = savedVol * progress
-                        self.outputEngine.setMasterVolume(fadedVol)
+                        self.setMasterVolume(savedVol * progress)
                     }
 
                     if self.sleepTimerRemaining <= 0 {
-                        self.outputEngine.setMasterVolume(0)
+                        self.setMasterVolume(0)
                         self.sleepTimerMinutes = nil
                         self.sleepTimerRemaining = 0
                         t.invalidate()
@@ -455,8 +454,7 @@ class AppState: ObservableObject {
     }
 
     private func checkCurrentNetwork() {
-        // Get current SSID via CoreWLAN
-        // Using process substitution to avoid import complexity
+        // Get current SSID via airport CLI (avoids CoreWLAN entitlement complexity)
         let task = Process()
         task.launchPath = "/usr/sbin/airport"
         task.arguments = ["-I"]
