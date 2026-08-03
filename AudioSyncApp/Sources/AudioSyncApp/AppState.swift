@@ -64,14 +64,6 @@ class AppState: ObservableObject {
         return result
     }
 
-    // MARK: - Persistence Keys
-    
-    private static let kSettingsKey = "com.audiosync.deviceSettings"
-    private static let kOrderKey = "com.audiosync.deviceOrder"
-    private static let kProfilesKey = "com.audiosync.profiles"
-    private static let kActiveProfileKey = "com.audiosync.activeProfile"
-    private static let kMasterVolumeKey = "com.audiosync.masterVolume"
-
     /// Snapshot of the profile when it was loaded, used to detect modifications.
     private var loadedProfileSnapshot: RoomProfile?
 
@@ -659,46 +651,67 @@ class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Persistence
+    // MARK: - Persistence (file-based, survives app rebuilds)
+
+    private static var storageDir: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let dir = base.appendingPathComponent("AudioSyncApp", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static var settingsFileURL: URL { storageDir.appendingPathComponent("settings.json") }
+
+    private struct PersistedState: Codable {
+        var deviceSettings: [String: DeviceSettings]
+        var deviceOrder: [String]
+        var profiles: [String: RoomProfile]
+        var activeProfileName: String?
+        var masterVolume: Float
+        var networkProfileMap: [String: String]
+    }
 
     private func saveSettings() {
-        let defaults = UserDefaults.standard
-        if let encoded = try? JSONEncoder().encode(deviceSettings) {
-            defaults.set(encoded, forKey: Self.kSettingsKey)
+        let state = PersistedState(
+            deviceSettings: deviceSettings,
+            deviceOrder: deviceOrder,
+            profiles: profiles,
+            activeProfileName: activeProfileName,
+            masterVolume: masterVolume,
+            networkProfileMap: networkProfileMap
+        )
+        do {
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: Self.settingsFileURL, options: .atomic)
+            DLog("[AppState] Settings saved (\(deviceSettings.count) devices, \(profiles.count) profiles)")
+        } catch {
+            DLog("[AppState] Failed to save settings: \(error)")
         }
-        defaults.set(deviceOrder, forKey: Self.kOrderKey)
-        // Persist profiles
-        if let encoded = try? JSONEncoder().encode(profiles) {
-            defaults.set(encoded, forKey: Self.kProfilesKey)
-        }
-        defaults.set(activeProfileName, forKey: Self.kActiveProfileKey)
-        defaults.set(masterVolume, forKey: Self.kMasterVolumeKey)
-        DLog("[AppState] Settings saved (\(deviceSettings.count) devices, \(profiles.count) profiles)")
     }
 
     private func restoreSettings() {
-        let defaults = UserDefaults.standard
-        if let data = defaults.data(forKey: Self.kSettingsKey),
-           let saved = try? JSONDecoder().decode([String: DeviceSettings].self, from: data) {
-            deviceSettings = saved
-            DLog("[AppState] Restored \(saved.count) device settings")
+        let url = Self.settingsFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            DLog("[AppState] No saved settings file — starting fresh")
+            return
         }
-        deviceOrder = defaults.stringArray(forKey: Self.kOrderKey) ?? []
-        // Restore profiles
-        if let data = defaults.data(forKey: Self.kProfilesKey),
-           let saved = try? JSONDecoder().decode([String: RoomProfile].self, from: data) {
-            profiles = saved
-            DLog("[AppState] Restored \(saved.count) room profiles")
-        }
-        activeProfileName = defaults.string(forKey: Self.kActiveProfileKey)
-        masterVolume = defaults.float(forKey: Self.kMasterVolumeKey)
-        if masterVolume <= 0 { masterVolume = 1.0 }
-        networkProfileMap = defaults.dictionary(forKey: "com.audiosync.networkProfileMap") as? [String: String] ?? [:]
-        // Apply master volume to engine
-        outputEngine.setMasterVolume(masterVolume)
-        // Auto-load active profile on launch
-        if let name = activeProfileName, profiles[name] != nil {
-            loadProfile(name: name)
+        do {
+            let data = try Data(contentsOf: url)
+            let saved = try JSONDecoder().decode(PersistedState.self, from: data)
+            deviceSettings = saved.deviceSettings
+            deviceOrder = saved.deviceOrder
+            profiles = saved.profiles
+            activeProfileName = saved.activeProfileName
+            masterVolume = saved.masterVolume > 0 ? saved.masterVolume : 1.0
+            networkProfileMap = saved.networkProfileMap
+            DLog("[AppState] Restored \(saved.deviceSettings.count) devices, \(saved.profiles.count) profiles from \(url.path)")
+            outputEngine.setMasterVolume(masterVolume)
+            if let name = activeProfileName, profiles[name] != nil {
+                loadProfile(name: name)
+            }
+        } catch {
+            DLog("[AppState] Failed to restore settings: \(error)")
         }
     }
 
