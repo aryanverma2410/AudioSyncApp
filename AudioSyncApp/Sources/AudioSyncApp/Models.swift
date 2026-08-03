@@ -68,15 +68,45 @@ struct DeviceSettings: Equatable, Codable {
     var delayMs: Float = 0.0       // 0...maxDelayMs
     var volume: Float = 1.0        // 0...1
     var isMuted: Bool = false
+    var isSubwoofer: Bool = false
+    var crossoverHz: Float = 80     // low-pass cutoff for subwoofer mode
 
     static let defaultBluetooth = DeviceSettings(
         isEnabled: true,
         delayMs: 200,
         volume: 1.0,
-        isMuted: false
+        isMuted: false,
+        isSubwoofer: false,
+        crossoverHz: 80
     )
 
     static let maxDelayMs: Float = 1000
+}
+
+// MARK: - Reverb/Ambience Preset
+
+enum ReverbPreset: Int, CaseIterable, Codable, Sendable {
+    case none = 0, room = 1, hall = 2, stadium = 3, cathedral = 4
+
+    var label: String {
+        switch self {
+        case .none: return "None"
+        case .room: return "Room"
+        case .hall: return "Hall"
+        case .stadium: return "Stadium"
+        case .cathedral: return "Cathedral"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .none: return "waveform"
+        case .room: return "house"
+        case .hall: return "music.note.house"
+        case .stadium: return "sportscourt"
+        case .cathedral: return "building.columns"
+        }
+    }
 }
 
 // MARK: - Room Profile

@@ -1,6 +1,8 @@
 import Cocoa
 import SwiftUI
 import ServiceManagement
+import Carbon
+import CoreWLAN
 
 // MARK: - App Delegate
 
@@ -12,6 +14,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Set up menu bar item
         setupMenuBarItem()
 
+        setupGlobalHotkeys()
 
         // Set activation policy
         NSApp.setActivationPolicy(.regular)
@@ -78,6 +81,49 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 DLog("[AppDelegate] Failed to enable Launch at Login: \(error)")
             }
         }
+    }
+
+    // MARK: - Global Hotkeys
+
+    private var hotkeyRefs: [EventHotKeyRef] = []
+
+    private func setupGlobalHotkeys() {
+        registerHotkey(keyCode: UInt32(kVK_ANSI_K), modifiers: UInt32(cmdKey | shiftKey), id: 1)  // ⌘⇧K — toggle karaoke
+        registerHotkey(keyCode: UInt32(kVK_ANSI_M), modifiers: UInt32(cmdKey | shiftKey), id: 2)  // ⌘⇧M — toggle mute all
+        registerHotkey(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(cmdKey | shiftKey), id: 3)  // ⌘⇧S — start/stop
+        registerHotkey(keyCode: UInt32(kVK_Space), modifiers: UInt32(cmdKey | shiftKey), id: 4)  // ⌘⇧Space — sleep timer
+        DLog("[AppDelegate] Global hotkeys registered")
+    }
+
+    private func registerHotkey(keyCode: UInt32, modifiers: UInt32, id: UInt32) {
+        // Get event dispatcher
+        let eventSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+
+        // Install event handler
+        let handler: EventHandlerUPP = { _, eventRef, userData in
+            guard let eventRef = eventRef else { return noErr }
+            var hkID = EventHotKeyID()
+            GetEventParameter(eventRef, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                             nil, MemoryLayout<EventHotKeyID>.size, nil, &hkID)
+            // Post notification based on hotkey ID
+            let name: Notification.Name
+            switch hkID.id {
+            case 1: name = Notification.Name("com.audiosync.toggleKaraoke")
+            case 2: name = Notification.Name("com.audiosync.toggleMuteAll")
+            case 3: name = Notification.Name("com.audiosync.toggleRouting")
+            case 4: name = Notification.Name("com.audiosync.toggleSleepTimer")
+            default: return noErr
+            }
+            NotificationCenter.default.post(name: name, object: nil)
+            return noErr
+        }
+
+        InstallEventHandler(GetApplicationEventTarget(), handler, 1, [eventSpec], nil, nil)
+
+        var ref: EventHotKeyRef?
+        let hotkeyID = EventHotKeyID(signature: OSType(0x415553_4C), id: id)  // 'AUSL'
+        RegisterEventHotKey(keyCode, modifiers, hotkeyID, GetApplicationEventTarget(), 0, &ref)
+        if let ref = ref { hotkeyRefs.append(ref) }
     }
 
     @objc private func openWindow() {

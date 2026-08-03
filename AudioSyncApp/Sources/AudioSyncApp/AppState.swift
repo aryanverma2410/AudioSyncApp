@@ -25,6 +25,19 @@ class AppState: ObservableObject {
     @Published var masterVolume: Float = 1.0
     @Published var audioMode: AudioMode = .normal
     @Published var isAutoSyncing = false
+
+    // Sleep timer
+    @Published var sleepTimerMinutes: Int? = nil
+    @Published var sleepTimerRemaining: Int = 0
+
+    // DSP toggles
+    @Published var isMonoMode: Bool = false
+    @Published var isCompressorEnabled: Bool = false
+    @Published var reverbPreset: ReverbPreset = .none
+
+    // Network profile mapping
+    @Published var networkProfileMap: [String: String] = [:]  // SSID → profile name
+    @Published var currentSSID: String = ""
     let calibrator = AcousticCalibrator()
     let setupAssistant = SetupAssistant()
     private var cancellables = Set<AnyCancellable>()
@@ -32,6 +45,23 @@ class AppState: ObservableObject {
     /// Human-readable description of the active capture method (for UI display).
     var captureMethodDescription: String {
         systemCapturer.captureMethod.rawValue
+    }
+
+    /// Ordered devices for health dashboard display.
+    var orderedDevicesForHealth: [AudioOutputDevice] {
+        let devices = deviceDiscovery.devices
+        let order = deviceOrder
+        if order.isEmpty { return devices }
+        var result: [AudioOutputDevice] = []
+        for uid in order {
+            if let device = devices.first(where: { $0.uid == uid }) {
+                result.append(device)
+            }
+        }
+        for device in devices where !order.contains(device.uid) {
+            result.append(device)
+        }
+        return result
     }
 
     // MARK: - Persistence Keys
@@ -68,6 +98,40 @@ class AppState: ObservableObject {
         }
         NotificationCenter.default.addObserver(forName: .stopRouting, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.stop() }
+        }
+
+        // Global hotkey actions
+        NotificationCenter.default.addObserver(forName: Notification.Name("com.audiosync.toggleKaraoke"), object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let newMode: AudioMode = self.audioMode == .karaoke ? .normal : .karaoke
+                self.setAudioMode(newMode)
+            }
+        }
+        NotificationCenter.default.addObserver(forName: Notification.Name("com.audiosync.toggleMuteAll"), object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let allMuted = self.deviceSettings.values.allSatisfy { $0.isMuted }
+                for (uid, _) in self.deviceSettings {
+                    self.updateMute(uid, isMuted: !allMuted)
+                }
+            }
+        }
+        NotificationCenter.default.addObserver(forName: Notification.Name("com.audiosync.toggleRouting"), object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.isActive { self.stop() } else { Task { await self.start() } }
+            }
+        }
+        NotificationCenter.default.addObserver(forName: Notification.Name("com.audiosync.toggleSleepTimer"), object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.sleepTimerMinutes != nil {
+                    self.setSleepTimer(minutes: nil)
+                } else {
+                    self.setSleepTimer(minutes: 30)
+                }
+            }
         }
 
         // Sleep/wake recovery: restart routing after wake
@@ -301,6 +365,105 @@ class AppState: ObservableObject {
         outputEngine.setAudioMode(mode)
     }
 
+    // MARK: - Sleep Timer
+
+    private var sleepTimer: Timer?
+
+    func setSleepTimer(minutes: Int?) {
+        sleepTimer?.invalidate()
+        if let mins = minutes {
+            sleepTimerMinutes = mins
+            sleepTimerRemaining = mins * 60
+            sleepTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] t in
+                Task { @MainActor [weak self] in
+                    guard let self else { t.invalidate(); return }
+                    self.sleepTimerRemaining -= 1
+                    if self.sleepTimerRemaining <= 0 {
+                        self.stop()
+                        self.sleepTimerMinutes = nil
+                        self.sleepTimerRemaining = 0
+                        t.invalidate()
+                        DLog("[AppState] Sleep timer expired — routing stopped")
+                    }
+                }
+            }
+        } else {
+            sleepTimerMinutes = nil
+            sleepTimerRemaining = 0
+        }
+    }
+
+    // MARK: - DSP Controls
+
+    func setMonoMode(_ enabled: Bool) {
+        isMonoMode = enabled
+        outputEngine.setMonoMode(enabled)
+    }
+
+    func setCompressor(_ enabled: Bool) {
+        isCompressorEnabled = enabled
+        outputEngine.setCompressor(enabled: enabled)
+    }
+
+    func setReverb(_ preset: ReverbPreset) {
+        reverbPreset = preset
+        // Map to engine's Reverb.Preset
+        if let enginePreset = Reverb.Preset(rawValue: preset.rawValue) {
+            outputEngine.setReverb(enginePreset)
+        }
+    }
+
+    // MARK: - Subwoofer
+
+    func setSubwoofer(_ uid: String, enabled: Bool, crossoverHz: Float = 80) {
+        ensureSettingsExist(for: uid)
+        deviceSettings[uid]?.isSubwoofer = enabled
+        deviceSettings[uid]?.crossoverHz = crossoverHz
+        outputEngine.setSubwoofer(uid, enabled: enabled, crossoverHz: crossoverHz)
+        checkProfileModified()
+    }
+
+    // MARK: - Network Profile Auto-Switch
+
+    private var wifiMonitorTimer: Timer?
+
+    func startNetworkMonitoring() {
+        wifiMonitorTimer?.invalidate()
+        checkCurrentNetwork()
+        wifiMonitorTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.checkCurrentNetwork() }
+        }
+    }
+
+    private func checkCurrentNetwork() {
+        // Get current SSID via CoreWLAN
+        // Using process substitution to avoid import complexity
+        let task = Process()
+        task.launchPath = "/usr/sbin/airport"
+        task.arguments = ["-I"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        do { try task.run() } catch { return }
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let output = String(data: data, encoding: .utf8) else { return }
+        for line in output.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("SSID: ") {
+                let ssid = String(trimmed.dropFirst("SSID: ".count))
+                if ssid != currentSSID {
+                    currentSSID = ssid
+                    DLog("[AppState] WiFi changed to '\(ssid)'")
+                    if let profileName = networkProfileMap[ssid] {
+                        DLog("[AppState] Auto-switching to profile '\(profileName)' for SSID '\(ssid)'")
+                        loadProfile(name: profileName)
+                    }
+                }
+                return
+            }
+        }
+    }
+
     // MARK: - Profile Modification Detection
 
     /// Marks the active profile as modified if current settings differ from the loaded snapshot.
@@ -513,6 +676,7 @@ class AppState: ObservableObject {
         activeProfileName = defaults.string(forKey: Self.kActiveProfileKey)
         masterVolume = defaults.float(forKey: Self.kMasterVolumeKey)
         if masterVolume <= 0 { masterVolume = 1.0 }
+        networkProfileMap = defaults.dictionary(forKey: "com.audiosync.networkProfileMap") as? [String: String] ?? [:]
         // Apply master volume to engine
         outputEngine.setMasterVolume(masterVolume)
         // Auto-load active profile on launch

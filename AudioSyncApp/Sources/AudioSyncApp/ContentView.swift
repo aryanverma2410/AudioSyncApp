@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var newProfileName = ""
     @State private var showSaveProfileSheet = false
     @State private var showSetupWizard = false
+    @State private var showHealthDashboard = false
+    @State private var showMiniWidget = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,6 +38,17 @@ struct ContentView: View {
         )
         .sheet(isPresented: $showSetupWizard) {
             SetupWizardSheet(setupAssistant: appState.setupAssistant, isPresented: $showSetupWizard)
+        }
+        .sheet(isPresented: $showHealthDashboard) {
+            HealthDashboardView()
+                .environmentObject(appState)
+        }
+        .onChange(of: showMiniWidget) { show in
+            if show {
+                MiniWidgetPanelController.shared.show(appState)
+            } else {
+                MiniWidgetPanelController.shared.hide()
+            }
         }
     }
 
@@ -186,6 +199,89 @@ struct ContentView: View {
             .controlSize(.small)
             .frame(width: 100)
             .help("Audio mode: Normal, Karaoke (removes vocals), or Vocal+ (boosts vocals)")
+
+            Separator()
+
+            // DSP Effects menu (Mono, Compressor, Reverb)
+            Menu {
+                Toggle("Mono Mode", isOn: Binding(
+                    get: { appState.isMonoMode },
+                    set: { appState.setMonoMode($0) }
+                ))
+                .help("Downmix stereo to mono (fixes BT crackling)")
+
+                Toggle("Compressor/Limiter", isOn: Binding(
+                    get: { appState.isCompressorEnabled },
+                    set: { appState.setCompressor($0) }
+                ))
+                .help("Prevents volume spikes")
+
+                Divider()
+
+                Picker("Reverb", selection: Binding(
+                    get: { appState.reverbPreset },
+                    set: { appState.setReverb($0) }
+                )) {
+                    ForEach(ReverbPreset.allCases, id: \.self) { preset in
+                        Label(preset.label, systemImage: preset.icon).tag(preset)
+                    }
+                }
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("DSP: Mono, Compressor, Reverb")
+
+            Separator()
+
+            // Sleep timer menu
+            Menu {
+                Button("Off") { appState.setSleepTimer(minutes: nil) }
+                Divider()
+                ForEach([15, 30, 45, 60, 90], id: \.self) { mins in
+                    Button("\(mins) min") { appState.setSleepTimer(minutes: mins) }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: appState.sleepTimerMinutes != nil ? "timer" : "timer")
+                        .font(.caption)
+                    if appState.sleepTimerMinutes != nil {
+                        Text("\(appState.sleepTimerRemaining / 60):\(String(format: "%02d", appState.sleepTimerRemaining % 60))")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Sleep timer: auto-stop routing after N minutes")
+
+            Separator()
+
+            // Health dashboard button
+            Button {
+                showHealthDashboard = true
+            } label: {
+                Image(systemName: "heart.text.clipboard")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Device health: buffer fill, underruns, drift, latency")
+
+            // Mini widget toggle
+            Button {
+                showMiniWidget.toggle()
+            } label: {
+                Image(systemName: showMiniWidget ? "rectangle.pipeline" : "rectangle.split.2x1")
+                    .font(.caption)
+                    .foregroundColor(showMiniWidget ? .accentColor : .secondary)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Toggle mini floating widget")
 
             Separator()
 
@@ -758,6 +854,27 @@ struct DeviceControlCard: View {
                             .background(Color.cyan.opacity(0.12))
                             .cornerRadius(3)
                     }
+
+                    // End-to-end latency (when routing)
+                    if appState.isActive {
+                        let latency = appState.outputEngine.latency(for: device.uid)
+                        if latency > 0 {
+                            Text(String(format: "%.0fms", latency))
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundColor(latency > 300 ? .red : latency > 150 ? .orange : .green)
+                        }
+                    }
+
+                    // Subwoofer badge
+                    if settings.isSubwoofer {
+                        Text("SUB")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.purple)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(Color.purple.opacity(0.12))
+                            .cornerRadius(3)
+                    }
                 }
             }
 
@@ -926,6 +1043,18 @@ struct DeviceControlCard: View {
             .buttonStyle(.bordered)
             .controlSize(.mini)
             .help("Play a test tone on this speaker only")
+
+            // Subwoofer toggle
+            Toggle(isOn: Binding(
+                get: { settings.isSubwoofer },
+                set: { appState.setSubwoofer(device.uid, enabled: $0, crossoverHz: settings.crossoverHz) }
+            )) {
+                Label("Sub", systemImage: "speaker.wave.1")
+                    .font(.caption)
+            }
+            .toggleStyle(.button)
+            .controlSize(.mini)
+            .help("Toggle subwoofer mode — applies low-pass filter")
 
             Spacer()
 

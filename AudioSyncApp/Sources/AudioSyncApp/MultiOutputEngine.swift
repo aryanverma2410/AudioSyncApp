@@ -105,6 +105,8 @@ final class DelayedRingBuffer: @unchecked Sendable {
     private(set) var _writeCount: Int = 0
     private(set) var _readCount: Int = 0
     private(set) var _lastABLCount: Int = 0
+    private(set) var underrunCount: Int = 0
+    private(set) var lastDrift: Int = 0
 
     init(capacitySeconds: Double = 4.0, sampleRate: Double = kEngineSampleRate, isBluetooth: Bool = false) {
         // Round up to next power of 2 for fast modulo
@@ -119,6 +121,8 @@ final class DelayedRingBuffer: @unchecked Sendable {
     }
 
     deinit { buffer.deallocate() }
+
+    var frameCountValue: Int { frameCount }
 
     func setDelay(ms: Float, sampleRate: Double) {
         _delayFrames = Int(Double(ms) / 1000.0 * sampleRate)
@@ -171,6 +175,8 @@ final class DelayedRingBuffer: @unchecked Sendable {
         // Gradual drift correction: nudge ±1 frame per callback to smoothly converge
         // to the target distance (totalBehind). Hard snapping causes audio discontinuities.
         let currentDist = wp - rp
+        let drift = currentDist - totalBehind
+        lastDrift = drift
         if currentDist < totalBehind {
             // Reader too close to writer — skip 1 frame forward (slowly back off)
             rp += 1
@@ -191,6 +197,7 @@ final class DelayedRingBuffer: @unchecked Sendable {
             DelayedRingBuffer.fillSilence(ioData, frames: frames)
             // Snap read position to safe distance — prevents cascade of underruns
             _readPos = max(wp - totalBehind, 0)
+            underrunCount += 1
             return
         }
 
@@ -271,6 +278,167 @@ private let _audioMode = AtomicFloat(0)  // 0=normal, 1=karaoke, 2=vocalBoost
 
 // CPU overload flag — set when CPU > 80%, cleared when it drops below 60%
 private let _cpuOverloadFlag = AtomicFloat(0)
+
+// Mono mode — when 1, downmix L+R to mono in render callback
+private let _monoMode = AtomicFloat(0)
+
+// Subwoofer crossover: per-device low-pass filter state
+private let _subwooferLookup = ThreadSafeLookup<String, Bool>()
+private let _crossoverHzLookup = ThreadSafeLookup<String, Float>()
+// LPF state per device for subwoofer crossover (2nd-order Butterworth)
+private final class CrossoverLPF: @unchecked Sendable {
+    private var z1: Float = 0
+    private var z2: Float = 0
+    private var cutoffFreq: Float = 80
+    private var sampleRate: Float = 48000
+
+    func setCutoff(_ freq: Float, sampleRate: Float) {
+        self.cutoffFreq = freq
+        self.sampleRate = sampleRate
+    }
+
+    func process(_ sample: Float) -> Float {
+        // 2nd-order Butterworth low-pass via biquad
+        let w0 = 2 * Float.pi * cutoffFreq / sampleRate
+        let cosW0 = cos(w0)
+        let sinW0 = sin(w0)
+        let alpha = sinW0 / (Float(2) * 0.707) // Q = 0.707 for Butterworth
+        let b0 = (1 - cosW0) / 2
+        let b1 = 1 - cosW0
+        let b2 = (1 - cosW0) / 2
+        let a0 = 1 + alpha
+        let a1 = -2 * cosW0
+        let a2 = 1 - alpha
+        let x = sample
+        let y = b0 / a0 * x + b1 / a0 * z1 + b2 / a0 * z2 - a1 / a0 * (z1) - a2 / a0 * (z2)
+        z2 = z1
+        z1 = y
+        return y
+    }
+}
+private let _crossoverLPFLookup = ThreadSafeLookup<String, CrossoverLPF>()
+
+// Simple compressor/limiter — prevents volume spikes
+private final class Compressor: @unchecked Sendable {
+    private var envelope: Float = 0
+    var threshold: Float = 0.5    // -6dB default
+    var ratio: Float = 4          // 4:1
+    var attackCoeff: Float = 0.01  // fast attack
+    var releaseCoeff: Float = 0.001 // slower release
+    var isEnabled: Bool = false
+
+    func process(_ sample: Float) -> Float {
+        guard isEnabled else { return sample }
+        let absVal = abs(sample)
+        if absVal > threshold {
+            let targetGain = threshold + (absVal - threshold) / ratio
+            let gainReduction = targetGain / absVal
+            envelope = max(envelope * (1 - attackCoeff), gainReduction)
+        } else {
+            envelope = envelope * (1 - releaseCoeff) + 1.0 * releaseCoeff
+        }
+        return sample * envelope
+    }
+}
+private let _compressor = Compressor()
+
+// Schroeder reverberator — 4 comb filters + 2 allpass
+final class Reverb: @unchecked Sendable {
+    private var combBuffers: [[Float]] = []
+    private var combIndices: [Int] = []
+    private var allpassBuffers: [[Float]] = []
+    private var allpassIndices: [Int] = []
+    var wetMix: Float = 0
+    var isEnabled: Bool = false
+
+    enum Preset: Int, Sendable {
+        case none = 0, room = 1, hall = 2, stadium = 3, cathedral = 4
+    }
+
+    init() {
+        // Comb filter delays (samples at 48kHz)
+        let combDelays = [1687, 1601, 2053, 2251]
+        let allpassDelays = [347, 113]
+        combBuffers = combDelays.map { Array(repeating: 0, count: $0) }
+        combIndices = [0, 0, 0, 0]
+        allpassBuffers = allpassDelays.map { Array(repeating: 0, count: $0) }
+        allpassIndices = [0, 0]
+    }
+
+    func setPreset(_ preset: Preset) {
+        switch preset {
+        case .none:
+            isEnabled = false
+        case .room:
+            isEnabled = true
+            wetMix = 0.15
+        case .hall:
+            isEnabled = true
+            wetMix = 0.28
+        case .stadium:
+            isEnabled = true
+            wetMix = 0.40
+        case .cathedral:
+            isEnabled = true
+            wetMix = 0.50
+        }
+    }
+
+    func process(_ sample: Float) -> Float {
+        guard isEnabled else { return sample }
+        // Comb filters
+        var wet: Float = 0
+        let combFeedback: Float = 0.7
+        for i in 0..<combBuffers.count {
+            let buf = combBuffers[i]
+            let idx = combIndices[i]
+            let output = buf[idx]
+            let input = sample + output * combFeedback
+            combBuffers[i][idx] = input
+            combIndices[i] = (idx + 1) % buf.count
+            wet += output
+        }
+        // Normalize comb sum
+        wet /= Float(combBuffers.count)
+        // Allpass filters
+        var ap = wet
+        let allpassFeedback: Float = 0.7
+        for i in 0..<allpassBuffers.count {
+            let buf = allpassBuffers[i]
+            let idx = allpassIndices[i]
+            let delayed = buf[idx]
+            let output = -ap + delayed
+            allpassBuffers[i][idx] = ap + delayed * allpassFeedback
+            allpassIndices[i] = (idx + 1) % buf.count
+            ap = output
+        }
+        return sample * (1 - wetMix) + ap * wetMix
+    }
+}
+private let _reverb = Reverb()
+
+// Per-device end-to-end latency (ms), updated in render callback
+private let _latencyLookup = ThreadSafeLookup<String, Float>()
+// Timestamp of last audio buffer capture (mach_absolute_time)
+private final class AtomicUInt64: @unchecked Sendable {
+    private var _value: UInt64 = 0
+    private var _lock = os_unfair_lock_s()
+    func store(_ v: UInt64) { os_unfair_lock_lock(&_lock); _value = v; os_unfair_lock_unlock(&_lock) }
+    func load() -> UInt64 { os_unfair_lock_lock(&_lock); defer { os_unfair_lock_unlock(&_lock) }; return _value }
+}
+private let _captureTimestamp = AtomicUInt64()
+
+// MARK: - Device Health Tracking
+struct DeviceHealth: Sendable {
+    var underrunCount: Int
+    var avgDrift: Float
+    var bufferFillPercent: Float
+    var latencyMs: Float
+    var isHealthy: Bool { underrunCount < 10 && abs(avgDrift) < 500 }
+}
+
+private let _underrunCountLookup = ThreadSafeLookup<String, Int>()
+private let _driftLookup = ThreadSafeLookup<String, Float>()
 
 // MARK: - Simple Biquad (1st-order shelf for bass/treble, peaking for mid)
 
@@ -409,15 +577,27 @@ final class MultiOutputEngine: ObservableObject {
         DLog("Starting \(deviceOutputs.count) HAL output unit(s)...")
         for (uid, output) in deviceOutputs {
             DLog("  Starting HAL unit for '\(output.device.name)' (id=\(output.device.id))...")
-            let status = AudioOutputUnitStart(output.halUnit)
+            var status: OSStatus = noErr
+            var retries = 0
+            repeat {
+                status = AudioOutputUnitStart(output.halUnit)
+                if status != noErr {
+                    retries += 1
+                    DLog("  HAL start attempt \(retries)/3 failed for '\(output.device.name)' (status=\(status)), retrying in 500ms...")
+                    if retries < 3 {
+                        Thread.sleep(forTimeInterval: 0.5)
+                    }
+                }
+            } while status != noErr && retries < 3
+
             if status != noErr {
-                DLog("  ERROR: AudioOutputUnitStart failed with status \(status) for '\(output.device.name)'")
+                DLog("  ERROR: AudioOutputUnitStart failed after 3 retries for '\(output.device.name)'")
                 for (uid2, output2) in deviceOutputs where uid2 != uid {
                     AudioOutputUnitStop(output2.halUnit)
                 }
                 throw EngineError.halConfigFailed
             }
-            DLog("  HAL unit started successfully for '\(output.device.name)'")
+            DLog("  HAL unit started successfully for '\(output.device.name)'\(retries > 0 ? " (after \(retries) retries)" : "")")
         }
 
         isRunning = true
@@ -449,6 +629,7 @@ final class MultiOutputEngine: ObservableObject {
     /// Writes captured audio DIRECTLY to all device ring buffers.
     /// Called from SCStream's audio callback — bypasses AVAudioEngine entirely.
     nonisolated func distributeAudioDirect(_ buffer: AVAudioPCMBuffer) {
+        _captureTimestamp.store(mach_absolute_time())
         // Diagnostic: measure peak level
         let frames = Int(buffer.frameLength)
         var peak: Float = 0
@@ -763,6 +944,34 @@ final class MultiOutputEngine: ObservableObject {
         _audioMode.store(Float(mode.rawValue))
     }
 
+    /// Toggle mono downmix (useful for BT devices that handle stereo poorly).
+    func setMonoMode(_ enabled: Bool) {
+        _monoMode.store(enabled ? 1 : 0)
+    }
+
+    /// Configure a device as subwoofer with crossover frequency.
+    func setSubwoofer(_ deviceUID: String, enabled: Bool, crossoverHz: Float = 80) {
+        _subwooferLookup.set(deviceUID, enabled)
+        _crossoverHzLookup.set(deviceUID, crossoverHz)
+        if enabled {
+            let lpf = CrossoverLPF()
+            lpf.setCutoff(crossoverHz, sampleRate: Float(kEngineSampleRate))
+            _crossoverLPFLookup.set(deviceUID, lpf)
+        }
+    }
+
+    /// Configure global compressor/limiter.
+    func setCompressor(enabled: Bool, threshold: Float = 0.5, ratio: Float = 4) {
+        _compressor.isEnabled = enabled
+        _compressor.threshold = threshold
+        _compressor.ratio = ratio
+    }
+
+    /// Set global reverb/ambience preset.
+    func setReverb(_ preset: Reverb.Preset) {
+        _reverb.setPreset(preset)
+    }
+
     /// Reset all device EQ bands to flat (0). Returns the list of affected UIDs.
     @discardableResult
     func resetAllEQ() -> [String] {
@@ -780,6 +989,30 @@ final class MultiOutputEngine: ObservableObject {
     /// Get the current peak level for a device (0.0...1.0). Returns 0 if not found.
     func peakLevel(for deviceUID: String) -> Float {
         _levelLookup.get(deviceUID) ?? 0
+    }
+
+    /// Get the end-to-end latency for a device (ms).
+    func latency(for deviceUID: String) -> Float {
+        _latencyLookup.get(deviceUID) ?? 0
+    }
+
+    /// Get health metrics for a device.
+    func healthReport(for deviceUID: String) -> DeviceHealth {
+        let wp: Int, rp: Int, fc: Int
+        if let output = deviceOutputs[deviceUID] {
+            wp = output.buffer.currentWritePos
+            rp = output.buffer.currentReadPos
+            fc = output.buffer.frameCountValue
+        } else {
+            wp = 0; rp = 0; fc = 1
+        }
+        let fill = Float(max(wp - rp, 0)) / Float(fc)
+        return DeviceHealth(
+            underrunCount: _underrunCountLookup.get(deviceUID) ?? 0,
+            avgDrift: _driftLookup.get(deviceUID) ?? 0,
+            bufferFillPercent: fill * 100,
+            latencyMs: _latencyLookup.get(deviceUID) ?? 0
+        )
     }
 
     // MARK: - Auto-Delay Compensation
@@ -1136,9 +1369,67 @@ final class MultiOutputEngine: ObservableObject {
 
         rb.read(into: ioData, frames: inNumberFrames)
 
+        // Sync health metrics from ring buffer to lookups
+        _underrunCountLookup.set(uid, rb.underrunCount)
+        _driftLookup.set(uid, Float(rb.lastDrift))
+
+        // Apply mono downmix if enabled (before volume/EQ)
+        if _monoMode.load() > 0.5 {
+            let ablMono = UnsafeMutableAudioBufferListPointer(ioData)
+            if ablMono.count >= 2, let leftData = ablMono[0].mData, let rightData = ablMono[1].mData {
+                let leftPtr = leftData.assumingMemoryBound(to: Float.self)
+                let rightPtr = rightData.assumingMemoryBound(to: Float.self)
+                let count = Int(ablMono[0].mDataByteSize / UInt32(MemoryLayout<Float>.size))
+                for i in 0..<count {
+                    let mono = (leftPtr[i] + rightPtr[i]) * 0.5
+                    leftPtr[i] = mono
+                    rightPtr[i] = mono
+                }
+            }
+        }
+
         // Apply volume scaling if not 1.0
         if vol < 0.999 {
             DelayedRingBuffer.applyVolume(vol, to: ioData, frames: inNumberFrames)
+        }
+
+        // Apply compressor/limiter if enabled
+        if _compressor.isEnabled {
+            let ablC = UnsafeMutableAudioBufferListPointer(ioData)
+            for buf in ablC {
+                guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
+                let ptr = data.assumingMemoryBound(to: Float.self)
+                let count = Int(buf.mDataByteSize / UInt32(MemoryLayout<Float>.size))
+                for i in 0..<count {
+                    ptr[i] = _compressor.process(ptr[i])
+                }
+            }
+        }
+
+        // Apply reverb/ambience if enabled
+        if _reverb.isEnabled {
+            let ablR = UnsafeMutableAudioBufferListPointer(ioData)
+            for buf in ablR {
+                guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
+                let ptr = data.assumingMemoryBound(to: Float.self)
+                let count = Int(buf.mDataByteSize / UInt32(MemoryLayout<Float>.size))
+                for i in 0..<count {
+                    ptr[i] = _reverb.process(ptr[i])
+                }
+            }
+        }
+
+        // Apply subwoofer crossover (low-pass filter) if device is configured as subwoofer
+        if _subwooferLookup.get(uid) == true, let lpf = _crossoverLPFLookup.get(uid) {
+            let ablSub = UnsafeMutableAudioBufferListPointer(ioData)
+            for buf in ablSub {
+                guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
+                let ptr = data.assumingMemoryBound(to: Float.self)
+                let count = Int(buf.mDataByteSize / UInt32(MemoryLayout<Float>.size))
+                for i in 0..<count {
+                    ptr[i] = lpf.process(ptr[i])
+                }
+            }
         }
 
         // Apply audio mode processing (karaoke center-cancel, vocal boost, or EQ)
@@ -1169,6 +1460,17 @@ final class MultiOutputEngine: ObservableObject {
                     }
                 }
             }
+        }
+
+        // End-to-end latency measurement
+        let now = mach_absolute_time()
+        let captured = _captureTimestamp.load()
+        if captured > 0 {
+            var info = mach_timebase_info()
+            mach_timebase_info(&info)
+            let elapsed = (now - captured) * UInt64(info.numer) / UInt64(info.denom) // nanoseconds
+            let latencyMs = Float(elapsed) / 1_000_000
+            _latencyLookup.set(uid, latencyMs)
         }
 
         // VU meter: measure peak level after volume (non-blocking, ~200ns)
