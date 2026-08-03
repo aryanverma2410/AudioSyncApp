@@ -81,6 +81,16 @@ struct ContentView: View {
                     Label("Save Current as Profile…", systemImage: "plus")
                 }
 
+                if appState.activeProfileName != nil && appState.isProfileModified {
+                    Button {
+                        if let name = appState.activeProfileName {
+                            appState.saveProfile(name: name)
+                        }
+                    } label: {
+                        Label("Update Current Profile", systemImage: "arrow.clockwise")
+                    }
+                }
+
                 Divider()
 
                 if appState.profiles.isEmpty {
@@ -95,17 +105,18 @@ struct ContentView: View {
                                 if appState.activeProfileName == name {
                                     Image(systemName: "checkmark")
                                 }
+                                Spacer()
                             }
                         }
-                    }
-
-                    Divider()
-
-                    ForEach(appState.profiles.keys.sorted(), id: \.self) { name in
+                        Button {
+                            appState.saveProfile(name: name)
+                        } label: {
+                            Label("Update", systemImage: "arrow.clockwise")
+                        }
                         Button(role: .destructive) {
                             appState.deleteProfile(name: name)
                         } label: {
-                            Label("Delete \"\(name)\"", systemImage: "trash")
+                            Label("Delete", systemImage: "trash")
                         }
                     }
                 }
