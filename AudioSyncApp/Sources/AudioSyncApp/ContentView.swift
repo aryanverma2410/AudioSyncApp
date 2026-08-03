@@ -182,23 +182,29 @@ struct ContentView: View {
 
             Spacer()
 
-            // Audio mode picker (Normal / Karaoke / Vocal Boost)
-            Picker(selection: Binding(
-                get: { appState.audioMode },
-                set: { appState.setAudioMode($0) }
-            )) {
-                Text("Normal").tag(AudioMode.normal)
-                Label("Karaoke", systemImage: "music.mic").tag(AudioMode.karaoke)
-                Label("Vocal+", systemImage: "person.wave.2").tag(AudioMode.vocalBoost)
+            // Karaoke toggle (mutually exclusive with Voice Isolation)
+            Button {
+                appState.setAudioMode(appState.audioMode == .karaoke ? .normal : .karaoke)
             } label: {
-                let mode = appState.audioMode
-                Image(systemName: mode == .karaoke ? "music.mic" : mode == .vocalBoost ? "person.wave.2" : "waveform")
+                Label("Karaoke", systemImage: "music.mic")
                     .font(.caption)
             }
-            .pickerStyle(.menu)
+            .buttonStyle(.bordered)
             .controlSize(.small)
-            .frame(width: 100)
-            .help("Audio mode: Normal, Karaoke (removes vocals), or Vocal+ (boosts vocals)")
+            .tint(appState.audioMode == .karaoke ? .purple : .accentColor)
+            .help("Karaoke: reduces vocals, keeps instruments")
+
+            // Voice Isolation toggle (mutually exclusive with Karaoke)
+            Button {
+                appState.setAudioMode(appState.audioMode == .vocalBoost ? .normal : .vocalBoost)
+            } label: {
+                Label("Voice Iso", systemImage: "person.wave.2")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(appState.audioMode == .vocalBoost ? .green : .accentColor)
+            .help("Voice Isolation: boosts vocals, reduces background")
 
             Separator()
 

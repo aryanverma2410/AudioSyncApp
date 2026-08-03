@@ -74,17 +74,28 @@ struct MiniWidgetView: View {
                     .frame(width: 30, alignment: .trailing)
             }
 
-            // Audio mode
-            Picker("", selection: Binding(
-                get: { appState.audioMode },
-                set: { appState.setAudioMode($0) }
-            )) {
-                Text("Normal").tag(AudioMode.normal)
-                Label("Karaoke", systemImage: "music.mic").tag(AudioMode.karaoke)
-                Label("Vocal+", systemImage: "person.wave.2").tag(AudioMode.vocalBoost)
+            // Karaoke / Voice Isolation (mutually exclusive)
+            HStack(spacing: 4) {
+                Button {
+                    appState.setAudioMode(appState.audioMode == .karaoke ? .normal : .karaoke)
+                } label: {
+                    Image(systemName: "music.mic")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(appState.audioMode == .karaoke ? .purple : .accentColor)
+
+                Button {
+                    appState.setAudioMode(appState.audioMode == .vocalBoost ? .normal : .vocalBoost)
+                } label: {
+                    Image(systemName: "person.wave.2")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(appState.audioMode == .vocalBoost ? .green : .accentColor)
             }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
 
             // Sleep timer
             if appState.sleepTimerMinutes != nil {
