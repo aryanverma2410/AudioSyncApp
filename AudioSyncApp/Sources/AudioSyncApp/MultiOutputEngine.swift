@@ -388,7 +388,7 @@ final class Reverb: @unchecked Sendable {
         guard isEnabled else { return sample }
         // Comb filters
         var wet: Float = 0
-        let combFeedback: Float = 0.7
+        let combFeedback: Float = 0.6
         for i in 0..<combBuffers.count {
             let buf = combBuffers[i]
             let idx = combIndices[i]
@@ -402,7 +402,7 @@ final class Reverb: @unchecked Sendable {
         wet /= Float(combBuffers.count)
         // Allpass filters
         var ap = wet
-        let allpassFeedback: Float = 0.7
+        let allpassFeedback: Float = 0.5
         for i in 0..<allpassBuffers.count {
             let buf = allpassBuffers[i]
             let idx = allpassIndices[i]
@@ -412,7 +412,9 @@ final class Reverb: @unchecked Sendable {
             allpassIndices[i] = (idx + 1) % buf.count
             ap = output
         }
-        return sample * (1 - wetMix) + ap * wetMix
+        // Soft-clip wet signal to prevent hard digital clipping (tanh approx)
+        let clipped = ap * (1.0 / (1.0 + abs(ap)))
+        return sample * (1 - wetMix) + clipped * wetMix
     }
 }
 private let _reverb = Reverb()
@@ -1435,17 +1437,20 @@ final class MultiOutputEngine: ObservableObject {
         // Apply audio mode processing (karaoke center-cancel, vocal boost, or EQ)
         let modeRaw = _audioMode.load()
         let abl2 = UnsafeMutableAudioBufferListPointer(ioData)
-        if modeRaw == 1 {  // karaoke: center-channel cancellation (L-R subtraction)
-            // Subtract center-panned content (typically vocals) from both channels.
-            // Uses a gentle low-pass on the difference to preserve stereo width.
+        if modeRaw == 1 {  // karaoke: partial center reduction (vocals reduced, instruments/bass preserved)
+            // Decompose into center (vocals, bass, kick) and side (stereo content).
+            // Reduce center by 70% but keep 30% so instruments/bass remain audible.
+            // Preserve stereo: L gets +side, R gets -side.
             if abl2.count >= 2, let leftData = abl2[0].mData, let rightData = abl2[1].mData {
                 let leftPtr = leftData.assumingMemoryBound(to: Float.self)
                 let rightPtr = rightData.assumingMemoryBound(to: Float.self)
                 let count = Int(abl2[0].mDataByteSize / UInt32(MemoryLayout<Float>.size))
+                let centerGain: Float = 0.3  // keep 30% of center (instruments/bass)
                 for i in 0..<count {
-                    let diff = (leftPtr[i] - rightPtr[i]) * 0.5
-                    leftPtr[i] = diff
-                    rightPtr[i] = diff
+                    let center = (leftPtr[i] + rightPtr[i]) * 0.5
+                    let side = (leftPtr[i] - rightPtr[i]) * 0.5
+                    leftPtr[i] = side + center * centerGain
+                    rightPtr[i] = -side + center * centerGain
                 }
             }
         } else if modeRaw == 2 {  // vocal boost: amplify mid frequencies
