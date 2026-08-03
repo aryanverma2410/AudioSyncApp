@@ -397,11 +397,11 @@ class AppState: ObservableObject {
                     }
 
                     if self.sleepTimerRemaining <= 0 {
-                        self.stop()
+                        self.outputEngine.setMasterVolume(0)
                         self.sleepTimerMinutes = nil
                         self.sleepTimerRemaining = 0
                         t.invalidate()
-                        DLog("[AppState] Sleep timer expired — routing stopped")
+                        DLog("[AppState] Sleep timer expired — volume faded to 0 (routing still active)")
                     }
                 }
             }
