@@ -126,6 +126,13 @@ final class DelayedRingBuffer: @unchecked Sendable {
 
     func setDelay(ms: Float, sampleRate: Double) {
         _delayFrames = Int(Double(ms) / 1000.0 * sampleRate)
+        // Resync read position to new delay immediately — without this, drift correction
+        // only moves 1 frame/callback and takes thousands of callbacks to converge.
+        OSMemoryBarrier()
+        let wp = _writePos
+        if wp > 0 {
+            _readPos = max(wp - (_delayFrames + safetyFrames), 0)
+        }
     }
 
     /// Current write position (for diagnostics / auto-delay measurement)
