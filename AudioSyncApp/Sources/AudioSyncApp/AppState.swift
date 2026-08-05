@@ -275,7 +275,10 @@ class AppState: ObservableObject {
 
     func toggleDevice(_ uid: String, enabled: Bool) {
         ensureSettingsExist(for: uid)
-        deviceSettings[uid]?.isEnabled = enabled
+        if var s = deviceSettings[uid] {
+            s.isEnabled = enabled
+            deviceSettings[uid] = s  // replace entry → triggers @Published
+        }
         checkProfileModified()
 
         if enabled {
@@ -318,29 +321,41 @@ class AppState: ObservableObject {
 
     func updateDelay(_ uid: String, ms: Float) {
         ensureSettingsExist(for: uid)
-        deviceSettings[uid]?.delayMs = ms
+        if var s = deviceSettings[uid] {
+            s.delayMs = ms
+            deviceSettings[uid] = s  // replace entry → triggers @Published
+        }
         outputEngine.updateDelay(for: uid, ms: ms)
         checkProfileModified()
     }
 
     func updateVolume(_ uid: String, volume: Float) {
         ensureSettingsExist(for: uid)
-        deviceSettings[uid]?.volume = volume
+        if var s = deviceSettings[uid] {
+            s.volume = volume
+            deviceSettings[uid] = s  // replace entry → triggers @Published
+        }
         outputEngine.updateVolume(for: uid, volume: volume)
         checkProfileModified()
     }
 
     func updateMute(_ uid: String, isMuted: Bool) {
         ensureSettingsExist(for: uid)
-        deviceSettings[uid]?.isMuted = isMuted
+        if var s = deviceSettings[uid] {
+            s.isMuted = isMuted
+            deviceSettings[uid] = s  // replace entry → triggers @Published
+        }
         outputEngine.updateMute(for: uid, isMuted: isMuted)
         checkProfileModified()
     }
 
     /// Set all enabled, non-muted devices to a specific volume level.
     func setAllVolumeToLevel(_ targetVolume: Float) {
-        for (uid, settings) in deviceSettings where settings.isEnabled && !settings.isMuted {
-            deviceSettings[uid]?.volume = targetVolume
+        for (uid, _) in deviceSettings where deviceSettings[uid]?.isEnabled == true && deviceSettings[uid]?.isMuted == false {
+            if var s = deviceSettings[uid] {
+                s.volume = targetVolume
+                deviceSettings[uid] = s  // replace entry → triggers @Published
+            }
             outputEngine.updateVolume(for: uid, volume: targetVolume)
         }
         checkProfileModified()
@@ -427,8 +442,11 @@ class AppState: ObservableObject {
 
     func setSubwoofer(_ uid: String, enabled: Bool, crossoverHz: Float = 80) {
         ensureSettingsExist(for: uid)
-        deviceSettings[uid]?.isSubwoofer = enabled
-        deviceSettings[uid]?.crossoverHz = crossoverHz
+        if var s = deviceSettings[uid] {
+            s.isSubwoofer = enabled
+            s.crossoverHz = crossoverHz
+            deviceSettings[uid] = s  // replace entry → triggers @Published
+        }
         outputEngine.setSubwoofer(uid, enabled: enabled, crossoverHz: crossoverHz)
         checkProfileModified()
     }
@@ -598,7 +616,10 @@ class AppState: ObservableObject {
         let compensated = outputEngine.applyAutoDelayCompensation(enabledUIDs: enabledUIDs, currentDelays: currentDelays)
 
         for (uid, delayMs) in compensated {
-            deviceSettings[uid]?.delayMs = delayMs
+            if var s = deviceSettings[uid] {
+                s.delayMs = delayMs
+                deviceSettings[uid] = s  // replace entry → triggers @Published
+            }
         }
         isAutoSyncing = false
         return compensated
