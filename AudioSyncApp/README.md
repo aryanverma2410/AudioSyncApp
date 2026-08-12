@@ -34,10 +34,14 @@ Route **all system audio** to **multiple speakers simultaneously** — each with
 
 ### Option 1: Download DMG (Recommended)
 
-1. Go to **[Releases](https://github.com/aryanverma2410/AudioSyncApp/releases)**
-2. Download `AudioSync.dmg`
-3. Open the DMG → drag **AudioSync.app** to **Applications**
-4. **First launch:** Right-click the app → **Open** (required once for unsigned apps)
+> **[⬇ Download AudioSync v1.1 DMG](https://github.com/aryanverma2410/AudioSyncApp/releases/download/v1.1/AudioSync.dmg)**
+
+1. Download `AudioSync.dmg` from the link above or **[Releases](https://github.com/aryanverma2410/AudioSyncApp/releases)**
+2. Open the DMG → drag **AudioSyncApp.app** to **Applications**
+3. **Install BlackHole 2ch** (free, required for audio capture): `brew install blackhole-2ch`
+4. **First launch:** Right-click AudioSyncApp → **Open** (required once for unsigned apps)
+5. Click **Start Setup** in the app — auto-configures BlackHole routing
+6. Grant **Screen Recording** permission when prompted
 
 ### Option 2: Build from Source
 
