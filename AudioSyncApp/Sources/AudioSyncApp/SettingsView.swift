@@ -5,11 +5,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
 
-    @AppStorage("launchAtLogin") private var launchAtLogin = false
-    @AppStorage("showInMenuBar") private var showInMenuBar = true
-    @AppStorage("defaultBluetoothDelay") private var defaultBluetoothDelay: Int = 200
-    @AppStorage("autoStartCapture") private var autoStartCapture = false
-
     var body: some View {
         TabView {
             generalTab
@@ -20,11 +15,6 @@ struct SettingsView: View {
             audioTab
                 .tabItem {
                     Label("Audio", systemImage: "waveform")
-                }
-
-            profilesTab
-                .tabItem {
-                    Label("Profiles", systemImage: "square.grid.2x2")
                 }
 
             aboutTab
@@ -38,14 +28,7 @@ struct SettingsView: View {
     // MARK: - General Tab
 
     private var generalTab: some View {
-        Form {  // DLog: Update toolbar layout constraints
-            Section("Startup") {
-                Toggle("Launch at Login", isOn: $launchAtLogin)
-                Toggle("Show in Menu Bar", isOn: $showInMenuBar)
-            // TODO: Tweak ring buffer size constant
-                Toggle("Auto-start audio capture", isOn: $autoStartCapture)
-            }
-
+        Form {
             Section("Permissions") {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -59,7 +42,7 @@ struct SettingsView: View {
                     Button("Open System Settings") {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                             NSWorkspace.shared.open(url)
-                        }  // DLog: Improve device discovery error handling
+                        }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -74,6 +57,12 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                     }
                 }
+            }
+
+            Section("Tip") {
+                Text("Launch at Login can be toggled from the menu bar icon.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -112,25 +101,6 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Default Values") {
-                Picker("Bluetooth Delay", selection: $defaultBluetoothDelay) {
-                    Text("0 ms").tag(0)
-                    Text("100 ms").tag(100)
-                    Text("150 ms").tag(150)
-                    Text("200 ms").tag(200)
-                    Text("300 ms").tag(300)
-                    Text("500 ms").tag(500)
-                }
-
-                HStack {
-                    Text("Engine Format")
-                    Spacer()
-                    Text("48 kHz / Stereo / Float32")
-                        .foregroundColor(.secondary)
-                        .font(.subheadline)
-                }
-            }
-
             Section("Device Discovery") {
                 HStack {
                     Text("Detected Devices")
@@ -141,85 +111,6 @@ struct SettingsView: View {
 
                 Button("Refresh Devices Now") {
                     appState.deviceDiscovery.refreshDevices()
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-
-    // MARK: - Profiles Tab
-
-    @State private var newProfileName = ""
-
-    private var profilesTab: some View {
-        Form {
-            Section("Room Profiles") {
-                Text("Save and restore speaker configurations for different rooms or setups. Use ⌘1–5 to quickly switch between the first 5 profiles.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                if appState.profiles.isEmpty {
-                    Text("No profiles saved yet")
-                        .italic()
-                        .foregroundColor(.secondary)
-                } else {
-                    ForEach(appState.profiles.keys.sorted(), id: \.self) { name in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(name)
-                                        .fontWeight(.medium)
-                                    if appState.activeProfileName == name {
-                                        Text("Active")
-                                            .font(.caption2)
-                                            .foregroundColor(.green)
-                                            .padding(.horizontal, 4)
-                                            .padding(.vertical, 1)
-                                            .background(Color.green.opacity(0.1))
-                                            .cornerRadius(3)
-                                    }
-                                }
-                                if let profile = appState.profiles[name] {
-                                    Text("\(profile.deviceSettings.count) devices • \(profile.metronomeBPM) BPM • \(profile.timestamp, style: .relative)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            Spacer()
-                            Button {
-                                appState.loadProfile(name: name)
-                            } label: {
-                                Image(systemName: "arrow.uturn.backward")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .help("Load this profile")
-
-                            Button(role: .destructive) {
-                                appState.deleteProfile(name: name)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .help("Delete this profile")
-                        }
-                    }
-                }
-            }
-
-            Section("Create Profile") {
-                HStack {
-                    TextField("Profile name", text: $newProfileName)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Save Current") {
-                        guard !newProfileName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                        appState.saveProfile(name: newProfileName.trimmingCharacters(in: .whitespaces))
-                        newProfileName = ""
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(newProfileName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }

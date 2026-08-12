@@ -203,7 +203,7 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(appState.audioMode == .karaoke ? .purple : .accentColor)
-            .help("Karaoke: reduces vocals, keeps instruments")
+            .help("Karaoke: reduces vocals, keeps instruments  (⌘⇧K)")
 
             // Voice Isolation toggle (mutually exclusive with Karaoke)
             Button {
@@ -215,7 +215,7 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(appState.audioMode == .vocalBoost ? .green : .accentColor)
-            .help("Voice Isolation: boosts vocals, reduces background")
+            .help("Voice Isolation: boosts vocals, reduces background  (⌘⇧K to toggle off)")
 
             Separator()
 
@@ -273,7 +273,7 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Sleep timer: auto-stop routing after N minutes")
+            .help("Sleep timer: auto-stop routing after N minutes  (⌘⇧Space to toggle 30 min)")
 
             Separator()
 
@@ -690,6 +690,8 @@ struct ContentView: View {
             ForEach(orderedDevices) { device in
                 DeviceControlCard(device: device)
                     .environmentObject(appState)
+                    .onDrag { NSItemProvider(object: device.uid as NSString) }
+                    .onDrop(of: [.text], delegate: DeviceDropDelegate(targetUID: device.uid, appState: appState))
             }
         }
     }
@@ -943,7 +945,8 @@ struct DeviceControlCard: View {
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                 Spacer()
-                Text("\(Int(settings.volume * 100))%")
+                let volDb: String = settings.volume > 0.001 ? String(format: "%+.0fdB", 20 * log10(settings.volume)) : "-∞"
+                Text("\(Int(settings.volume * 100))%  \(volDb)")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundColor(settings.isMuted ? .red : .primary)
             }
@@ -1240,5 +1243,29 @@ struct SetupStepRow: View {
             }
             Spacer()
         }
+    }
+}
+
+// MARK: - Device Drop Delegate (drag-to-reorder)
+
+struct DeviceDropDelegate: DropDelegate {
+    let targetUID: String
+    let appState: AppState
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let provider = info.itemProviders(for: [.text]).first else { return false }
+        provider.loadObject(ofClass: NSString.self) { draggedUID, _ in
+            guard let draggedUID = draggedUID as? String else { return }
+            Task { @MainActor in
+                guard draggedUID != targetUID else { return }
+                let order = appState.deviceOrder
+                guard let from = order.firstIndex(of: draggedUID),
+                      let to = order.firstIndex(of: targetUID) else { return }
+                var newOrder = order
+                newOrder.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+                appState.deviceOrder = newOrder
+            }
+        }
+        return true
     }
 }

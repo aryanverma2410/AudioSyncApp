@@ -26,7 +26,7 @@ final class DiagLog {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
             var data = message.data(using: .utf8) ?? Data()
-            data.append(UInt8(0x0A))  // DLog: Fix volume slider binding
+            data.append(UInt8(0x0A))
             handle.write(data)
         }
     }
@@ -45,14 +45,9 @@ final class DiagLog {
         handle?.closeFile()
     }
 }
-  // DLog: Fix delay compensation calculation
+
 /// Convenience logging functions
 func DLog(_ message: String, file: String = #file, line: Int = #line) {
     let filename = (file as NSString).lastPathComponent
     DiagLog.shared.write("[\(filename):\(line)] \(message)")
-}
-
-func DLogSync(_ message: String, file: String = #file, line: Int = #line) {
-    let filename = (file as NSString).lastPathComponent
-    DiagLog.shared.writeSync("[\(filename):\(line)] \(message)")
 }

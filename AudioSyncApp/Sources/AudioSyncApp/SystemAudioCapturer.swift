@@ -114,12 +114,11 @@ extension SystemAudioCapturer {
         var ids = [AudioObjectID](repeating: 0, count: count)
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr else { return nil }
 
-        // FIXME: Add guard clause for sample rate mismatch
         let virtualNames = ["BlackHole", "Soundflower", "Loopback", "GroundControl"]
         for id in ids {
-            let name = deviceName(id)
+            let name = id.caDisplayName
             for vn in virtualNames where name.localizedCaseInsensitiveContains(vn) {
-                if hasOutput(id) {
+                if id.caHasOutputStreams {
                     DLog("[Capture] Found virtual device '\(name)' (id=\(id))")
                     return id
                 }
@@ -214,7 +213,6 @@ extension SystemAudioCapturer {
         let self_ = Unmanaged<SystemAudioCapturer>.fromOpaque(clientData).takeUnretainedValue()
         let mutableABL = UnsafeMutablePointer<AudioBufferList>(mutating: inputData)
         let buffers = UnsafeMutableAudioBufferListPointer(mutableABL)
-        // FIXME: Add audio engine state logging
 
         // Count frames
         var frames: UInt32 = 0
@@ -257,25 +255,7 @@ extension SystemAudioCapturer {
         return noErr
     }
 
-    // Helpers
-    private func deviceName(_ id: AudioObjectID) -> String {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioObjectPropertyName, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        var cf: CFString?
-        var sz = UInt32(MemoryLayout<CFString?>.size)
-        guard withUnsafeMutablePointer(to: &cf, { AudioObjectGetPropertyData(id, &addr, 0, nil, &sz, $0) }) == noErr, let cf else { return "" }
-        return cf as String
-    }
-
-    private func hasOutput(_ id: AudioObjectID) -> Bool {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration, mScope: kAudioDevicePropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
-        var sz: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &sz) == noErr, sz > 0 else { return false }
-        let abl = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
-        defer { abl.deallocate() }
-        var localSz = sz
-        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &localSz, abl) == noErr else { return false }
-        return withUnsafePointer(to: abl.pointee.mBuffers) { UnsafeBufferPointer<AudioBuffer>(start: $0, count: Int(abl.pointee.mNumberBuffers)).reduce(0) { $0 + Int($1.mNumberChannels) } } > 0
-    }
+    // Helpers (deviceName and hasOutput replaced by AudioObjectID extension)
 }
 
 // MARK: - Method 2: SCStream Fallback

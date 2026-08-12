@@ -37,8 +37,6 @@ struct DeviceCalibrationResult: Identifiable, Equatable {
     var arrivalMs: Float?
     /// Recommended delay compensation (relative to fastest speaker).
     var recommendedDelayMs: Float?
-    /// Cross-check deviation from sequential measurement (ms). nil = not cross-checked.
-    var crossCheckDeviationMs: Float?
     /// Confidence: 0 = uncertain, 1 = high confidence
     var confidence: Float = 0
 
@@ -191,10 +189,6 @@ final class AcousticCalibrator: ObservableObject {
         // Step 4: Compute relative delays
         computeRecommendations(arrivalTimes: arrivalTimes)
 
-        // Step 5: Cross-check (all speakers chirp simultaneously)
-        state = .crossChecking
-        await crossCheck(deviceUIDs: deviceUIDs)
-
         // Done
         stopMicCapture()
         state = .done
@@ -230,7 +224,7 @@ final class AcousticCalibrator: ObservableObject {
         let recordedSamples = getMicSamples()
 
         // Cross-correlate chirp template against recorded signal
-        let arrivalOffsetSamples = crossCorrelate(template: chirpTemplate, signal: recordedSamples)
+        let (arrivalOffsetSamples, peakStrength) = crossCorrelate(template: chirpTemplate, signal: recordedSamples)
 
         // Convert sample offset to milliseconds from send time
         // The offset from cross-correlation is the delay in samples from the
@@ -243,7 +237,6 @@ final class AcousticCalibrator: ObservableObject {
         let arrivalMs = Float(arrivalOffsetSamples) / sampleRate * 1000.0
 
         // Confidence: stronger correlation peak = higher confidence
-        let peakStrength = crossCorrelationPeakStrength(template: chirpTemplate, signal: recordedSamples)
         results[uid]?.confidence = min(peakStrength / 0.3, 1.0) // 0.3 threshold
 
         DLog("[Calibrator] '\(uid)': arrival=\(String(format: "%.1f", arrivalMs))ms, confidence=\(String(format: "%.2f", min(peakStrength / 0.3, 1.0)))")
@@ -252,28 +245,21 @@ final class AcousticCalibrator: ObservableObject {
 
     // MARK: - Cross-Correlation
 
-    /// Cross-correlate template against signal. Returns the sample offset where
-    /// the template best matches (0 = start of signal).
-    ///
-    /// Uses normalized cross-correlation (NCC) for robustness against volume differences.
-    /// Sliding window: compare template at each position in signal.
-    private func crossCorrelate(template: [Float], signal: [Float]) -> Int {
-        guard template.count > 0, signal.count > template.count else { return 0 }
+    /// Cross-correlate template against signal. Returns (sample offset, peak NCC strength).
+    private func crossCorrelate(template: [Float], signal: [Float]) -> (offset: Int, ncc: Float) {
+        guard template.count > 0, signal.count > template.count else { return (0, 0) }
 
         let templateLen = template.count
         let searchLen = signal.count - templateLen
-        guard searchLen > 0 else { return 0 }
+        guard searchLen > 0 else { return (0, 0) }
 
-        // Template energy (computed once)
         var templateEnergy: Float = 0
         for i in 0..<templateLen { templateEnergy += template[i] * template[i] }
-        guard templateEnergy > 0 else { return 0 }
+        guard templateEnergy > 0 else { return (0, 0) }
 
         var bestOffset = 0
-        var bestCorrelation: Float = -Float.infinity
+        var bestNCC: Float = -1
 
-        // Slide template across signal
-        // Step by 4 for speed (still gives ~0.1ms resolution at 48kHz)
         let step = 4
         for offset in stride(from: 0, to: searchLen, by: step) {
             var correlation: Float = 0
@@ -285,18 +271,17 @@ final class AcousticCalibrator: ObservableObject {
                 signalEnergy += s * s
             }
 
-            // Normalized cross-correlation
             let denominator = sqrt(templateEnergy * signalEnergy)
             if denominator > 0.001 {
                 let ncc = correlation / denominator
-                if ncc > bestCorrelation {
-                    bestCorrelation = ncc
+                if ncc > bestNCC {
+                    bestNCC = ncc
                     bestOffset = offset
                 }
             }
         }
 
-        // Refine: search ±step around best with step=1 for sample accuracy
+        // Refine: search ±step around best with step=1
         let refineStart = max(0, bestOffset - step)
         let refineEnd = min(searchLen, bestOffset + step)
         for offset in refineStart..<refineEnd {
@@ -312,48 +297,14 @@ final class AcousticCalibrator: ObservableObject {
             let denominator = sqrt(templateEnergy * signalEnergy)
             if denominator > 0.001 {
                 let ncc = correlation / denominator
-                if ncc > bestCorrelation {
-                    bestCorrelation = ncc
+                if ncc > bestNCC {
+                    bestNCC = ncc
                     bestOffset = offset
                 }
             }
         }
 
-        return bestOffset
-    }
-
-    /// Returns the peak NCC strength (0...1) for confidence estimation.
-    private func crossCorrelationPeakStrength(template: [Float], signal: [Float]) -> Float {
-        guard template.count > 0, signal.count > template.count else { return 0 }
-
-        let templateLen = template.count
-        let searchLen = signal.count - templateLen
-
-        var templateEnergy: Float = 0
-        for i in 0..<templateLen { templateEnergy += template[i] * template[i] }
-        guard templateEnergy > 0 else { return 0 }
-
-        var bestCorrelation: Float = -1
-
-        let step = 4
-        for offset in stride(from: 0, to: searchLen, by: step) {
-            var correlation: Float = 0
-            var signalEnergy: Float = 0
-
-            for i in 0..<templateLen {
-                let s = signal[offset + i]
-                correlation += template[i] * s
-                signalEnergy += s * s
-            }
-
-            let denominator = sqrt(templateEnergy * signalEnergy)
-            if denominator > 0.001 {
-                let ncc = correlation / denominator
-                if ncc > bestCorrelation { bestCorrelation = ncc }
-            }
-        }
-
-        return max(bestCorrelation, 0)
+        return (bestOffset, max(bestNCC, 0))
     }
 
     // MARK: - Recommendations
@@ -373,47 +324,6 @@ final class AcousticCalibrator: ObservableObject {
             let rounded = round(compensation / 5.0) * 5.0
             results[uid]?.recommendedDelayMs = rounded
         }
-    }
-
-    // MARK: - Cross-Check
-
-    /// All speakers chirp simultaneously. We verify that their arrivals
-    /// match the sequential measurement (within tolerance).
-    private func crossCheck(deviceUIDs: [(uid: String, name: String)]) async {
-        DLog("[Calibrator] Cross-check: all \(deviceUIDs.count) speakers chirping simultaneously")
-
-        clearMicBuffer()
-        isRecording = true
-
-        // Inject chirp to ALL devices at once
-        for device in deviceUIDs {
-            outputEngine?.injectCalibrationChirp(for: device.uid)
-        }
-
-        // Wait for all chirps to arrive
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-        isRecording = false
-
-        let recordedSamples = getMicSamples()
-
-        // Cross-correlate the chirp template against the combined signal
-        // If the sequential measurements were correct, the combined signal should
-        // show a strong single peak (all aligned) or multiple peaks if misaligned.
-        let peakOffset = crossCorrelate(template: chirpTemplate, signal: recordedSamples)
-        let peakStrength = crossCorrelationPeakStrength(template: chirpTemplate, signal: recordedSamples)
-
-        // If the cross-check shows a single clean peak, confidence is high.
-        // Multiple peaks or spread = speakers are not aligned.
-        // For now, just record the peak strength as cross-check quality.
-        // A more sophisticated approach would use per-frequency-band chirps
-        // and FFT separation, but that's significantly more complex.
-        for device in deviceUIDs {
-            // Deviation: compare cross-check timing against sequential
-            // (In a full implementation, we'd use unique chirp frequencies per speaker)
-            results[device.uid]?.crossCheckDeviationMs = nil // Not enough info from single-chirp cross-check
-        }
-
-        DLog("[Calibrator] Cross-check complete. Peak strength: \(String(format: "%.2f", peakStrength)) at offset \(peakOffset)")
     }
 
     /// Apply calibration results to the app state (set delays).

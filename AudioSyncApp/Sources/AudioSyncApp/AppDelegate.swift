@@ -30,9 +30,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu Bar Item
 
-        // FIXME: Add sample rate validation check
     private func setupMenuBarItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem = item
 
         if let button = item.button {
@@ -57,6 +56,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         item.menu = menu
+
+        // Observe sleep timer countdown updates from AppState
+        NotificationCenter.default.addObserver(forName: Notification.Name("com.audiosync.sleepTimerTick"), object: nil, queue: .main) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                let remaining = notification.userInfo?["remaining"] as? Int ?? 0
+                self?.updateMenuBarCountdown(remaining: remaining)
+            }
+        }
+    }
+
+    @MainActor
+    private func updateMenuBarCountdown(remaining: Int) {
+        guard let item = statusItem, let button = item.button else { return }
+        if remaining > 0 {
+            let mins = remaining / 60
+            let secs = remaining % 60
+            button.title = " \(mins):\(String(format: "%02d", secs))"
+            button.image = nil
+        } else {
+            button.title = ""
+            button.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "AudioSync")
+            button.image?.size = NSSize(width: 18, height: 18)
+        }
     }
 
     // MARK: - Launch at Login

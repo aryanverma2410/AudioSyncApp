@@ -153,7 +153,6 @@ class AppState: ObservableObject {
             .dropFirst() // skip initial restored value
             .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.saveSettings() }
-        // FIXME: Add system audio capture status
             .store(in: &cancellables)
 
         $deviceOrder
@@ -294,6 +293,8 @@ class AppState: ObservableObject {
 
     /// Sync newly appeared devices into the active routing session.
     /// Called when CoreAudio detects a device list change while routing is active.
+    /// Handles three cases: brand-new devices, reconnected BT devices (same UID, new ID),
+    /// and stale devices that need teardown.
     private func syncNewDevices() {
         guard isActive else { return }
         let captureDeviceID = systemCapturer.activeCaptureDeviceID
@@ -308,9 +309,6 @@ class AppState: ObservableObject {
             // New device — add with default settings
             let settings = defaultSettings(for: device)
             deviceSettings[device.uid] = settings
-            if device.transportType.isBluetooth {
-                DLog("[AppState] BT auto-reconnect: '\(device.name)' detected, resuming routing")
-            }
             DLog("[AppState] Auto-adding new device '\(device.name)' to routing")
             
             if settings.isEnabled {
@@ -318,7 +316,6 @@ class AppState: ObservableObject {
             }
         }
     }
-
     func updateDelay(_ uid: String, ms: Float) {
         ensureSettingsExist(for: uid)
         if var s = deviceSettings[uid] {
@@ -390,10 +387,14 @@ class AppState: ObservableObject {
             sleepTimerMinutes = mins
             sleepTimerRemaining = mins * 60
             preFadeMasterVolume = masterVolume
+            NotificationCenter.default.post(name: Notification.Name("com.audiosync.sleepTimerTick"), object: nil, userInfo: ["remaining": sleepTimerRemaining])
             sleepTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] t in
                 Task { @MainActor [weak self] in
                     guard let self else { t.invalidate(); return }
                     self.sleepTimerRemaining -= 1
+
+                    // Post countdown for menu bar display
+                    NotificationCenter.default.post(name: Notification.Name("com.audiosync.sleepTimerTick"), object: nil, userInfo: ["remaining": self.sleepTimerRemaining])
 
                     // Gradual fade in last 2 minutes (120 seconds)
                     let fadeSeconds: Float = 120
@@ -406,6 +407,7 @@ class AppState: ObservableObject {
                         self.setMasterVolume(0)
                         self.sleepTimerMinutes = nil
                         self.sleepTimerRemaining = 0
+                        NotificationCenter.default.post(name: Notification.Name("com.audiosync.sleepTimerTick"), object: nil, userInfo: ["remaining": 0])
                         t.invalidate()
                         DLog("[AppState] Sleep timer expired — volume faded to 0 (routing still active)")
                     }
@@ -415,6 +417,7 @@ class AppState: ObservableObject {
             sleepTimerMinutes = nil
             sleepTimerRemaining = 0
             preFadeMasterVolume = nil
+            NotificationCenter.default.post(name: Notification.Name("com.audiosync.sleepTimerTick"), object: nil, userInfo: ["remaining": 0])
         }
     }
 
@@ -629,7 +632,6 @@ class AppState: ObservableObject {
 
     /// Get the current peak level for a device (0.0...1.0).
     func peakLevel(for uid: String) -> Float {
-        // FIXME: Add latency measurement logging
         outputEngine.peakLevel(for: uid)
     }
 

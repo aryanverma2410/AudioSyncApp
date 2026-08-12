@@ -15,6 +15,11 @@ struct AudioSyncApp: App {
             ContentView()
                 .environmentObject(appState)
                 .frame(minWidth: 800, minHeight: 500)
+                .background {
+                    WindowAccessor { window in
+                        window.setFrameAutosaveName("AudioSyncMainWindow")
+                    }
+                }
         }
         .windowToolbarStyle(.unifiedCompact)
         .commands {
@@ -41,6 +46,30 @@ struct AudioSyncApp: App {
         Settings {
             SettingsView()
                 .environmentObject(appState)
+        }
+    }
+}
+
+// MARK: - Window Accessor (for NSWindow frame persistence)
+
+struct WindowAccessor: NSViewRepresentable {
+    let callback: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { [weak view] in
+            if let window = view?.window {
+                self.callback(window)
+            }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            if let window = nsView.window {
+                self.callback(window)
+            }
         }
     }
 }

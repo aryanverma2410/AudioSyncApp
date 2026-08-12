@@ -1,5 +1,52 @@
 import Foundation
 import SwiftUI
+import CoreAudio
+import AudioToolbox
+
+// MARK: - Shared CoreAudio Helpers
+
+extension AudioObjectID {
+    /// Read device display name from CoreAudio.
+    var caDisplayName: String {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var cfString: CFString?
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        let status = withUnsafeMutablePointer(to: &cfString) { ptr in
+            AudioObjectGetPropertyData(self, &addr, 0, nil, &size, ptr)
+        }
+        guard status == noErr, let cfString else { return "" }
+        return cfString as String
+    }
+
+    /// Check if device has at least one output stream.
+    var caHasOutputStreams: Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(self, &addr, 0, nil, &size) == noErr, size > 0 else { return false }
+
+        let bufferList = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
+        defer { bufferList.deallocate() }
+        var localSize = size
+        guard AudioObjectGetPropertyData(self, &addr, 0, nil, &localSize, bufferList) == noErr else { return false }
+
+        let numBuffers = Int(bufferList.pointee.mNumberBuffers)
+        guard numBuffers > 0 else { return false }
+
+        let totalChannels = withUnsafePointer(to: bufferList.pointee.mBuffers) { ptr in
+            let buffers = UnsafeBufferPointer<AudioBuffer>(start: ptr, count: numBuffers)
+            return buffers.reduce(0) { $0 + Int($1.mNumberChannels) }
+        }
+        return totalChannels > 0
+    }
+}
 
 // MARK: - Audio Output Device
 
@@ -80,6 +127,29 @@ struct DeviceSettings: Equatable, Codable {
     )
 
     static let maxDelayMs: Float = 1000
+
+    // Memberwise init (needed because defining init(from:) suppresses synthesis)
+    init(isEnabled: Bool = true, delayMs: Float = 0.0, volume: Float = 1.0,
+         isMuted: Bool = false, isSubwoofer: Bool = false, crossoverHz: Float = 80) {
+        self.isEnabled = isEnabled
+        self.delayMs = delayMs
+        self.volume = volume
+        self.isMuted = isMuted
+        self.isSubwoofer = isSubwoofer
+        self.crossoverHz = crossoverHz
+    }
+
+    // Backward-compatible decoding: old settings.json without isSubwoofer/crossoverHz
+    // gets safe defaults instead of crashing.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        delayMs = try c.decodeIfPresent(Float.self, forKey: .delayMs) ?? 0.0
+        volume = try c.decodeIfPresent(Float.self, forKey: .volume) ?? 1.0
+        isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
+        isSubwoofer = try c.decodeIfPresent(Bool.self, forKey: .isSubwoofer) ?? false
+        crossoverHz = try c.decodeIfPresent(Float.self, forKey: .crossoverHz) ?? 80
+    }
 }
 
 // MARK: - Reverb/Ambience Preset

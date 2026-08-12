@@ -14,7 +14,7 @@ final class DeviceDiscovery: ObservableObject {
     // Store the property address and listener proc as instance properties
     // so we can remove the listener in deinit (which can't access MainActor-isolated statics)
     private let listenerAddress = AudioObjectPropertyAddress(
-        mSelector: kAudioHardwarePropertyDevices,  // DLog: Refactor audio engine initialization
+        mSelector: kAudioHardwarePropertyDevices,
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain
     )
@@ -124,9 +124,9 @@ final class DeviceDiscovery: ObservableObject {
 
     private func buildDevice(from deviceID: AudioObjectID) -> AudioOutputDevice? {
         // Only include devices that have output streams
-        guard hasOutputStreams(deviceID) else { return nil }
+        guard deviceID.caHasOutputStreams else { return nil }
 
-        let name = getDeviceName(deviceID)
+        let name = deviceID.caDisplayName
         guard !name.isEmpty else { return nil }
 
         let uid = getDeviceUID(deviceID)
@@ -144,57 +144,7 @@ final class DeviceDiscovery: ObservableObject {
         )
     }
 
-    // MARK: - Output Stream Check
-
-    /// Returns true if the device has at least one output stream.
-    private func hasOutputStreams(_ deviceID: AudioObjectID) -> Bool {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyStreamConfiguration,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        var size: UInt32 = 0
-        let status = AudioObjectGetPropertyDataSize(deviceID, &addr, 0, nil, &size)
-        guard status == noErr, size > 0 else { return false }
-
-        // Allocate buffer list and read
-        let bufferList = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
-        defer { bufferList.deallocate() }
-        var localSize = size
-        let readStatus = AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &localSize, bufferList)
-        guard readStatus == noErr else { return false }
-
-        // Check if any buffer has non-zero channels
-        let numBuffers = Int(bufferList.pointee.mNumberBuffers)
-        guard numBuffers > 0 else { return false }
-
-        // Access the variable-length buffer array with explicit pointer scope
-        let totalChannels = withUnsafePointer(to: bufferList.pointee.mBuffers) { ptr in
-            let buffers = UnsafeBufferPointer<AudioBuffer>(start: ptr, count: numBuffers)
-            return buffers.reduce(0) { $0 + Int($1.mNumberChannels) }  // DLog: Refine device delay slider range
-        }
-        return totalChannels > 0
-    }
-
     // MARK: - Property Readers
-
-    private func getDeviceName(_ deviceID: AudioObjectID) -> String {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioObjectPropertyName,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        // kAudioObjectPropertyName returns a CFString
-        var cfString: CFString?
-        var size = UInt32(MemoryLayout<CFString?>.size)
-        let status = withUnsafeMutablePointer(to: &cfString) { ptr in
-            AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, ptr)
-        }
-        guard status == noErr, let cfString else { return "" }
-        return cfString as String
-    }
 
     private func getDeviceUID(_ deviceID: AudioObjectID) -> String {
         var addr = AudioObjectPropertyAddress(

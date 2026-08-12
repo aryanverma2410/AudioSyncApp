@@ -102,8 +102,8 @@ class SetupAssistant: ObservableObject {
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr else { return nil }
 
         for id in ids {
-            let name = deviceName(id)
-            if name.localizedCaseInsensitiveContains("BlackHole") && hasOutputStreams(id) {
+            let name = id.caDisplayName
+            if name.localizedCaseInsensitiveContains("BlackHole") && id.caHasOutputStreams {
                 DLog("[SetupAssistant] Found BlackHole: '\(name)' (id=\(id))")
                 return id
             }
@@ -213,7 +213,7 @@ class SetupAssistant: ObservableObject {
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr else { return nil }
 
         for id in ids {
-            let name = deviceName(id)
+            let name = id.caDisplayName
             // Look for our named aggregate or user-created multi-output
             if name.localizedCaseInsensitiveContains("AudioSync") &&
                name.localizedCaseInsensitiveContains("Multi-Output") {
@@ -248,8 +248,8 @@ class SetupAssistant: ObservableObject {
         var otherUIDs: [String] = []
 
         for id in ids {
-            guard hasOutputStreams(id) else { continue }
-            let name = deviceName(id)
+            guard id.caHasOutputStreams else { continue }
+            let name = id.caDisplayName
             let uid = deviceUID(id)
 
             if name.localizedCaseInsensitiveContains("BlackHole") {
@@ -270,46 +270,27 @@ class SetupAssistant: ObservableObject {
             return nil
         }
 
-        // Build the aggregate device description
-        // Each sub-device needs a UID + a unique clock device UID
-        var subDevices: [[String: Any]] = []
-        for (i, uid) in deviceUIDs.enumerated() {
-            subDevices.append([
-                "uid": uid,
-                "name": "SubDevice \(i)"
-            ])
-        }
-
         let aggregateName = "AudioSync Multi-Output"
 
         let desc: [String: Any] = [
             "name": aggregateName,
             "uid": "com.audiosync.aggregate.\(UUID().uuidString)",
-            "subdevices": deviceUIDs,  // Array of UID strings
+            "subdevices": deviceUIDs,
             "master-device": deviceUIDs.first ?? "",
             "is-private": false
         ]
 
-        // Create via AudioHardwareCreateAggregateDevice
         var deviceID: AudioObjectID = 0
         let cfDesc = desc as CFDictionary
         let status = AudioHardwareCreateAggregateDevice(cfDesc, &deviceID)
 
         if status != noErr {
-            DLog("[SetupAssistant] AudioHardwareCreateAggregateDevice failed: \(status)")
-            // Fallback: try the deprecated property-list method
-            return createAggregateDeviceFallback(subDeviceUIDs: deviceUIDs, name: aggregateName)
+            DLog("[SetupAssistant] AudioHardwareCreateAggregateDevice failed: \(status). User may need to create Multi-Output manually in Audio MIDI Setup.")
+            return nil
         }
 
         DLog("[SetupAssistant] Created aggregate device id=\(deviceID)")
         return deviceID
-    }
-
-    /// Fallback: if AudioHardwareCreateAggregateDevice fails, log and return nil.
-    /// The primary API should work on macOS 13+; this is just defensive.
-    private func createAggregateDeviceFallback(subDeviceUIDs: [String], name: String) -> AudioObjectID? {
-        DLog("[SetupAssistant] Primary aggregate creation failed. User may need to create Multi-Output manually in Audio MIDI Setup.")
-        return nil
     }
 
     // MARK: - Set Default Output
@@ -343,20 +324,6 @@ class SetupAssistant: ObservableObject {
 
     // MARK: - Helpers
 
-    private func deviceName(_ id: AudioObjectID) -> String {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioObjectPropertyName,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var cfString: CFString?
-        var size = UInt32(MemoryLayout<CFString?>.size)
-        let status = withUnsafeMutablePointer(to: &cfString) { ptr in
-            AudioObjectGetPropertyData(id, &addr, 0, nil, &size, ptr)
-        }
-        guard status == noErr, let cfString else { return "" }
-        return cfString as String
-    }
-
     private func deviceUID(_ id: AudioObjectID) -> String {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceUID,
@@ -369,30 +336,5 @@ class SetupAssistant: ObservableObject {
         }
         guard status == noErr, let cfString else { return UUID().uuidString }
         return cfString as String
-    }
-
-    private func hasOutputStreams(_ id: AudioObjectID) -> Bool {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyStreamConfiguration,
-            mScope: kAudioDevicePropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain)
-        var size: UInt32 = 0
-        let status = AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size)
-        guard status == noErr, size > 0 else { return false }
-
-        let bufferList = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
-        defer { bufferList.deallocate() }
-        var localSize = size
-        let readStatus = AudioObjectGetPropertyData(id, &addr, 0, nil, &localSize, bufferList)
-        guard readStatus == noErr else { return false }
-
-        let numBuffers = Int(bufferList.pointee.mNumberBuffers)
-        guard numBuffers > 0 else { return false }
-
-        let totalChannels = withUnsafePointer(to: bufferList.pointee.mBuffers) { ptr in
-            let buffers = UnsafeBufferPointer<AudioBuffer>(start: ptr, count: numBuffers)
-            return buffers.reduce(0) { $0 + Int($1.mNumberChannels) }
-        }
-        return totalChannels > 0
     }
 }
