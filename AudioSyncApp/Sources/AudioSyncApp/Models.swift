@@ -116,6 +116,8 @@ struct DeviceSettings: Equatable, Codable {
     var isMuted: Bool = false
     var isSubwoofer: Bool = false
     var crossoverHz: Float = 80     // low-pass cutoff for subwoofer mode
+    var bass: Float = 0.0           // -1...1 (0 = flat, +1 = +6dB, -1 = -6dB)
+    var treble: Float = 0.0         // -1...1 (0 = flat, +1 = +6dB, -1 = -6dB)
 
     static let defaultBluetooth = DeviceSettings(
         isEnabled: true,
@@ -130,16 +132,19 @@ struct DeviceSettings: Equatable, Codable {
 
     // Memberwise init (needed because defining init(from:) suppresses synthesis)
     init(isEnabled: Bool = true, delayMs: Float = 0.0, volume: Float = 1.0,
-         isMuted: Bool = false, isSubwoofer: Bool = false, crossoverHz: Float = 80) {
+         isMuted: Bool = false, isSubwoofer: Bool = false, crossoverHz: Float = 80,
+         bass: Float = 0.0, treble: Float = 0.0) {
         self.isEnabled = isEnabled
         self.delayMs = delayMs
         self.volume = volume
         self.isMuted = isMuted
         self.isSubwoofer = isSubwoofer
         self.crossoverHz = crossoverHz
+        self.bass = bass
+        self.treble = treble
     }
 
-    // Backward-compatible decoding: old settings.json without isSubwoofer/crossoverHz
+    // Backward-compatible decoding: old settings.json without isSubwoofer/crossoverHz/bass/treble
     // gets safe defaults instead of crashing.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -149,6 +154,8 @@ struct DeviceSettings: Equatable, Codable {
         isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
         isSubwoofer = try c.decodeIfPresent(Bool.self, forKey: .isSubwoofer) ?? false
         crossoverHz = try c.decodeIfPresent(Float.self, forKey: .crossoverHz) ?? 80
+        bass = try c.decodeIfPresent(Float.self, forKey: .bass) ?? 0.0
+        treble = try c.decodeIfPresent(Float.self, forKey: .treble) ?? 0.0
     }
 }
 

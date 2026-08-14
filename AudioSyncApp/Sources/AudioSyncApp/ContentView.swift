@@ -219,37 +219,18 @@ struct ContentView: View {
 
             Separator()
 
-            // DSP Effects menu (Mono, Compressor, Reverb)
-            Menu {
-                Toggle("Mono Mode", isOn: Binding(
-                    get: { appState.isMonoMode },
-                    set: { appState.setMonoMode($0) }
-                ))
-                .help("Downmix stereo to mono (fixes BT crackling)")
-
-                Toggle("Compressor/Limiter", isOn: Binding(
-                    get: { appState.isCompressorEnabled },
-                    set: { appState.setCompressor($0) }
-                ))
-                .help("Prevents volume spikes")
-
-                Divider()
-
-                Picker("Reverb", selection: Binding(
-                    get: { appState.reverbPreset },
-                    set: { appState.setReverb($0) }
-                )) {
-                    ForEach(ReverbPreset.allCases, id: \.self) { preset in
-                        Label(preset.label, systemImage: preset.icon).tag(preset)
-                    }
+            // Reverb preset picker
+            Picker("Reverb", selection: Binding(
+                get: { appState.reverbPreset },
+                set: { appState.setReverb($0) }
+            )) {
+                ForEach(ReverbPreset.allCases, id: \.self) { preset in
+                    Label(preset.label, systemImage: preset.icon).tag(preset)
                 }
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.caption)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("DSP: Mono, Compressor, Reverb")
+            .pickerStyle(.menu)
+            .frame(maxWidth: 90)
+            .help("Reverb effect preset")
 
             Separator()
 
@@ -806,6 +787,7 @@ struct DeviceControlCard: View {
                     volumeSection
                     vuMeter
                     delaySection
+                    eqSection
                     actionBar
                 }
                 .padding(.horizontal, 12)
@@ -1047,6 +1029,61 @@ struct DeviceControlCard: View {
                 .help("Reset delay to 0ms")
             }
         }
+    }
+
+    // MARK: - EQ Section
+
+    private var eqSection: some View {
+        DisclosureGroup("EQ") {
+            VStack(spacing: 8) {
+                // Bass
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Label("Bass", systemImage: "speaker.wave.1")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(String(format: "%+.1fdB", settings.bass * 6))
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundColor(settings.bass != 0 ? .accentColor : .secondary)
+                    }
+                    Slider(value: Binding(
+                        get: { Double(settings.bass) },
+                        set: { appState.updateDeviceEQ(device.uid, bass: Float($0), treble: settings.treble) }
+                    ), in: -1...1, step: 0.05)
+                    .tint(.accentColor)
+                }
+                // Treble
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Label("Treble", systemImage: "speaker.wave.3")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(String(format: "%+.1fdB", settings.treble * 6))
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundColor(settings.treble != 0 ? .accentColor : .secondary)
+                    }
+                    Slider(value: Binding(
+                        get: { Double(settings.treble) },
+                        set: { appState.updateDeviceEQ(device.uid, bass: settings.bass, treble: Float($0)) }
+                    ), in: -1...1, step: 0.05)
+                    .tint(.accentColor)
+                }
+                // Reset
+                Button {
+                    appState.updateDeviceEQ(device.uid, bass: 0, treble: 0)
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Reset EQ to flat")
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundColor(.secondary)
     }
 
     // MARK: - Action Bar

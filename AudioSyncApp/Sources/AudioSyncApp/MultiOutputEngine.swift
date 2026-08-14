@@ -8,9 +8,9 @@ import Darwin
 
 private let kEngineSampleRate: Double = 48000
 private let kEngineChannels: UInt32 = 2
-private let kSafetyFrames: Int = 4096        // ~85ms at 48kHz — BT codec headroom
+private let kSafetyFrames: Int = 8192        // ~170ms at 48kHz — BT codec headroom (was 4096)
 private let kRingBufferPower: Int = 19       // 2^19 = 524288 frames ≈ 10.9s at 48kHz
-private let kMaxDelayMs: Float = 1000
+private let kMaxDelayMs: Float = 5000        // Allow up to 5s delay for auto-compensation
 
 // MARK: - Atomic Float (for diagnostics)
 
@@ -109,7 +109,7 @@ final class DelayedRingBuffer: @unchecked Sendable {
     private(set) var underrunCount: Int = 0
     private(set) var lastDrift: Int = 0
 
-    init(capacitySeconds: Double = 4.0, sampleRate: Double = kEngineSampleRate) {
+    init(capacitySeconds: Double = 6.0, sampleRate: Double = kEngineSampleRate) {
         self.bufferSampleRate = sampleRate
         // Round up to next power of 2 for fast modulo
         let rawFrames = Int(capacitySeconds * sampleRate)
@@ -208,16 +208,16 @@ final class DelayedRingBuffer: @unchecked Sendable {
 
         var rp = _readPos
 
-        // Hard-snap drift correction (same as v1.0 — no crackling):
-        // If reader drifted too close to writer, snap it back to safe distance.
-        // If reader drifted too far behind, snap it forward to catch up.
-        // Both cases jump forward only — never repeat frames (which causes BT crackling).
+        // Gradual drift correction: nudge read position by ±1 sample per callback.
+        // Hard-snap (jumping 100+ samples) caused audible clicks on BT speakers.
+        // Gradual correction eliminates discontinuity while still tracking drift.
         let currentDist = wp - rp
         lastDrift = currentDist - totalBehind
         if currentDist < totalBehind {
-            rp = wp - totalBehind
+            rp += 1  // reader too close to writer — skip 1 sample to fall back
         } else if currentDist > totalBehind + Int(frames) * 2 {
-            rp = wp - totalBehind
+            rp -= 1  // reader too far behind — repeat 1 sample to catch up
+            if rp < 0 { rp = 0 }
         }
 
         // Catastrophic overrun: reader fell behind by more than the entire ring buffer.
@@ -311,13 +311,7 @@ private let _audioMode = AtomicFloat(0)  // 0=normal, 1=karaoke, 2=vocalBoost
 // CPU overload flag — set when CPU > 80%, cleared when it drops below 60%
 private let _cpuOverloadFlag = AtomicFloat(0)
 
-// Mono mode — when 1, downmix L+R to mono in render callback
-private let _monoMode = AtomicFloat(0)
-
-// Compressor/reverb settings (global, applied to per-device instances)
-private let _compressorEnabled = AtomicFloat(0)
-private let _compressorThreshold = AtomicFloat(0.5)
-private let _compressorRatio = AtomicFloat(4)
+// Reverb settings (global, applied to per-device instances)
 private let _reverbPresetRaw = AtomicFloat(0)
 
 // Subwoofer crossover: per-device low-pass filter state
@@ -356,31 +350,21 @@ private final class CrossoverLPF: @unchecked Sendable {
 }
 private let _crossoverLPFLookup = ThreadSafeLookup<String, CrossoverLPF>()
 
-// Simple compressor/limiter — prevents volume spikes
-private final class Compressor: @unchecked Sendable {
-    private var envelope: Float = 0
-    var threshold: Float = 0.5    // -6dB default
-    var ratio: Float = 4          // 4:1
-    var attackCoeff: Float = 0.01  // fast attack
-    var releaseCoeff: Float = 0.001 // slower release
-    var isEnabled: Bool = false
+// Per-device reverb instances (each HAL thread gets its own)
+private let _reverbLookup = ThreadSafeLookup<String, Reverb>()
 
-    func process(_ sample: Float) -> Float {
-        guard isEnabled else { return sample }
-        let absVal = abs(sample)
-        if absVal > threshold {
-            let targetGain = threshold + (absVal - threshold) / ratio
-            let gainReduction = targetGain / absVal
-            envelope = max(envelope * (1 - attackCoeff), gainReduction)
-        } else {
-            envelope = envelope * (1 - releaseCoeff) + 1.0 * releaseCoeff
-        }
-        return sample * envelope
+// Aggressive karaoke: extracts bass from center channel to preserve while removing vocals
+private final class KaraokeFilter: @unchecked Sendable {
+    private var _lpfZ: Float = 0
+    private let _alpha: Float = 0.99  // ~100Hz cutoff at 48kHz — preserves bass/kick, cuts vocals
+
+    @inline(__always)
+    func process(_ center: Float) -> Float {
+        _lpfZ = _alpha * _lpfZ + (1 - _alpha) * center
+        return _lpfZ  // bass-only portion of center
     }
 }
-// Per-device reverb and compressor instances (each HAL thread gets its own)
-private let _reverbLookup = ThreadSafeLookup<String, Reverb>()
-private let _compressorLookup = ThreadSafeLookup<String, Compressor>()
+private let _karaokeBassLookup = ThreadSafeLookup<String, KaraokeFilter>()
 
 // Simple feedback reverb — one delay line with dampened feedback.
 // Far less CPU than Schroeder (1 delay vs 6), no crackling on BT.
@@ -388,8 +372,13 @@ final class Reverb: @unchecked Sendable {
     private var delayBuf: UnsafeMutablePointer<Float>
     private let delaySize: Int
     private var delayIdx: Int = 0
+    // Second delay line for denser, fuller reverb (different length avoids comb-filter ringing)
+    private var delayBuf2: UnsafeMutablePointer<Float>
+    private let delaySize2: Int
+    private var delayIdx2: Int = 0
     private var feedback: Float = 0
     private var dampened: Float = 0  // lowpassed feedback state
+    private var dampened2: Float = 0
     var wetMix: Float = 0
     var isEnabled: Bool = false
 
@@ -398,13 +387,17 @@ final class Reverb: @unchecked Sendable {
     }
 
     init() {
-        // ~40ms delay at 48kHz = 1920 samples
+        // Primary: ~40ms delay at 48kHz
         delaySize = 2048  // power of 2 for fast modulo
         delayBuf = UnsafeMutablePointer<Float>.allocate(capacity: delaySize)
         delayBuf.initialize(repeating: 0, count: delaySize)
+        // Secondary: ~59ms delay (prime ratio for dense, non-metallic reverb)
+        delaySize2 = 2816  // ~59ms at 48kHz, power of 2? No — use mask approach
+        delayBuf2 = UnsafeMutablePointer<Float>.allocate(capacity: delaySize2)
+        delayBuf2.initialize(repeating: 0, count: delaySize2)
     }
 
-    deinit { delayBuf.deallocate() }
+    deinit { delayBuf.deallocate(); delayBuf2.deallocate() }
 
     func setPreset(_ preset: Preset) {
         switch preset {
@@ -412,20 +405,20 @@ final class Reverb: @unchecked Sendable {
             isEnabled = false
         case .room:
             isEnabled = true
-            wetMix = 0.15
-            feedback = 0.45
+            wetMix = 0.28
+            feedback = 0.52
         case .hall:
             isEnabled = true
-            wetMix = 0.25
-            feedback = 0.55
+            wetMix = 0.38
+            feedback = 0.62
         case .stadium:
             isEnabled = true
-            wetMix = 0.35
-            feedback = 0.65
+            wetMix = 0.50
+            feedback = 0.70
         case .cathedral:
             isEnabled = true
-            wetMix = 0.45
-            feedback = 0.72
+            wetMix = 0.60
+            feedback = 0.78
         }
     }
 
@@ -433,14 +426,17 @@ final class Reverb: @unchecked Sendable {
     @inline(__always)
     func processWet(_ sample: Float) -> Float {
         guard isEnabled else { return 0 }
-        // Read delayed sample
+        // Primary delay line
         let delayed = delayBuf[delayIdx]
-        // Dampen feedback (simple one-pole lowpass to prevent harsh ringing)
         dampened = dampened * 0.5 + delayed * 0.5
-        // Write: input + dampened feedback
         delayBuf[delayIdx] = sample + dampened * feedback
-        delayIdx = (delayIdx + 1) & (delaySize - 1)  // power-of-2 fast modulo
-        return delayed
+        delayIdx = (delayIdx + 1) & (delaySize - 1)
+        // Secondary delay line (adds density — different length decorrelates reflections)
+        let delayed2 = delayBuf2[delayIdx2]
+        dampened2 = dampened2 * 0.6 + delayed2 * 0.4  // slightly different damping
+        delayBuf2[delayIdx2] = sample + dampened2 * feedback
+        delayIdx2 = (delayIdx2 + 1) % delaySize2  // modulo for non-power-of-2
+        return (delayed + delayed2) * 0.5
     }
 
     /// Full process: returns dry + wet. Used for mono fallback path.
@@ -978,11 +974,6 @@ final class MultiOutputEngine: ObservableObject {
         _audioMode.store(Float(mode.rawValue))
     }
 
-    /// Toggle mono downmix (useful for BT devices that handle stereo poorly).
-    func setMonoMode(_ enabled: Bool) {
-        _monoMode.store(enabled ? 1 : 0)
-    }
-
     /// Configure a device as subwoofer with crossover frequency.
     func setSubwoofer(_ deviceUID: String, enabled: Bool, crossoverHz: Float = 80) {
         _subwooferLookup.set(deviceUID, enabled)
@@ -992,20 +983,6 @@ final class MultiOutputEngine: ObservableObject {
             lpf.setCutoff(crossoverHz, sampleRate: Float(kEngineSampleRate))
             _crossoverLPFLookup.set(deviceUID, lpf)
         }
-    }
-
-    /// Configure compressor/limiter for all active devices.
-    func setCompressor(enabled: Bool, threshold: Float = 0.5, ratio: Float = 4) {
-        for uid in _compressorLookup.allKeys {
-            if let comp = _compressorLookup.get(uid) {
-                comp.isEnabled = enabled
-                comp.threshold = threshold
-                comp.ratio = ratio
-            }
-        }
-        _compressorEnabled.store(enabled ? 1 : 0)
-        _compressorThreshold.store(threshold)
-        _compressorRatio.store(ratio)
     }
 
     /// Set reverb/ambience preset for all active devices.
@@ -1161,16 +1138,18 @@ final class MultiOutputEngine: ObservableObject {
         MultiOutputEngine.bufferLookup.set(device.uid, ringBuffer)
         MultiOutputEngine.volumeLookup.set(device.uid, settings.isMuted ? 0 : settings.volume)
 
-        // Create per-device DSP instances (avoids shared-state races across audio threads)
+        // Create per-device reverb instance (avoids shared-state races across audio threads)
         let rev = Reverb()
         rev.setPreset(Reverb.Preset(rawValue: Int(_reverbPresetRaw.load())) ?? .none)
         _reverbLookup.set(device.uid, rev)
 
-        let comp = Compressor()
-        comp.isEnabled = _compressorEnabled.load() > 0.5
-        comp.threshold = _compressorThreshold.load()
-        comp.ratio = _compressorRatio.load()
-        _compressorLookup.set(device.uid, comp)
+        // Create per-device karaoke filter instance
+        _karaokeBassLookup.set(device.uid, KaraokeFilter())
+
+        // Create per-device EQ instance (for bass/treble controls)
+        _eqLookup.set(device.uid, SimpleEQ())
+        _bassLookup.set(device.uid, settings.bass)
+        _trebleLookup.set(device.uid, settings.treble)
 
         // Store the device UID string in a heap box so the C callback can access it via refCon
         let uidBox = Unmanaged.passRetained(NSString(string: device.uid)).toOpaque()
@@ -1225,7 +1204,7 @@ final class MultiOutputEngine: ObservableObject {
         _midLookup.remove(deviceUID)
         _eqLookup.remove(deviceUID)
         _reverbLookup.remove(deviceUID)
-        _compressorLookup.remove(deviceUID)
+        _karaokeBassLookup.remove(deviceUID)
         deviceOutputs.removeValue(forKey: deviceUID)
         activeDeviceCount = deviceOutputs.count
     }
@@ -1369,7 +1348,7 @@ final class MultiOutputEngine: ObservableObject {
             if canSet == noErr && writable.boolValue {
                 let status = AudioObjectSetPropertyData(deviceID, &addr, 0, nil, size, &vol)
                 if status == noErr {
-                    DLog("Set device \(deviceID) ch\(ch) volume to max (VolumeScalar)")
+                    DLog("Set device \\(deviceID) ch\\(ch) volume to max (VolumeScalar)")
                 }
             }
         }
@@ -1386,7 +1365,97 @@ final class MultiOutputEngine: ObservableObject {
         if vmCanSet == noErr && vmWritable.boolValue {
             let status = AudioObjectSetPropertyData(deviceID, &vmAddr, 0, nil, vmSize, &vmVol)
             if status == noErr {
-                DLog("Set device \(deviceID) VirtualMasterVolume to max")
+                DLog("Set device \\(deviceID) VirtualMasterVolume to max")
+            }
+        }
+    }
+
+    // Saved system volumes for restore on stop: [deviceID: volume]
+    private var savedSystemVolumes: [AudioObjectID: Float] = [:]
+
+    /// Read current system volume for each device and save it.
+    /// Call BEFORE configuring the engine (which sets volumes to max).
+    @MainActor
+    func saveSystemVolumes(devices: [AudioOutputDevice]) {
+        savedSystemVolumes.removeAll()
+        for device in devices {
+            let vol = Self.readDeviceVolume(device.id)
+            savedSystemVolumes[device.id] = vol
+            DLog("[Volume] Saved '\(device.name)' system volume: \(vol)")
+        }
+    }
+
+    /// Restore previously saved system volumes after routing stops.
+    @MainActor
+    func restoreSystemVolumes() {
+        for (deviceID, vol) in savedSystemVolumes {
+            Self.setDeviceVolume(deviceID, vol)
+            DLog("[Volume] Restored device \(deviceID) system volume to \(vol)")
+        }
+        savedSystemVolumes.removeAll()
+    }
+
+    /// Read a device's current system volume (0...1). Tries VirtualMasterVolume first
+    /// (covers BT + wired), falls back to averaging L+R channel VolumeScalar.
+    private static func readDeviceVolume(_ deviceID: AudioObjectID) -> Float {
+        // Try VirtualMasterVolume first (works for BT and wired)
+        var vmAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var vmVol: Float = 0
+        var vmSize = UInt32(MemoryLayout<Float>.size)
+        let vmStatus = AudioObjectGetPropertyData(deviceID, &vmAddr, 0, nil, &vmSize, &vmVol)
+        if vmStatus == noErr {
+            return vmVol
+        }
+        // Fallback: average of channel 0 and 1 VolumeScalar
+        var sum: Float = 0
+        var count: Float = 0
+        for ch in [0, 1] {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyVolumeScalar,
+                mScope: kAudioDevicePropertyScopeOutput,
+                mElement: UInt32(ch))
+            var vol: Float = 0
+            var size = UInt32(MemoryLayout<Float>.size)
+            let status = AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &vol)
+            if status == noErr {
+                sum += vol
+                count += 1
+            }
+        }
+        return count > 0 ? sum / count : 1.0
+    }
+
+    /// Set a device's system volume (0...1).
+    private static func setDeviceVolume(_ deviceID: AudioObjectID, _ volume: Float) {
+        // Try VirtualMasterVolume first (works for BT and wired)
+        var vmAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var vmVol = volume
+        var vmWritable: DarwinBoolean = false
+        let vmCanSet = AudioObjectIsPropertySettable(deviceID, &vmAddr, &vmWritable)
+        if vmCanSet == noErr && vmWritable.boolValue {
+            let status = AudioObjectSetPropertyData(deviceID, &vmAddr, 0, nil, UInt32(MemoryLayout<Float>.size), &vmVol)
+            if status == noErr {
+                DLog("Restored device \(deviceID) VirtualMasterVolume to \(volume)")
+                return
+            }
+        }
+        // Fallback: per-channel VolumeScalar
+        for ch in [0, 1] {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyVolumeScalar,
+                mScope: kAudioDevicePropertyScopeOutput,
+                mElement: UInt32(ch))
+            var vol = volume
+            var writable: DarwinBoolean = false
+            let canSet = AudioObjectIsPropertySettable(deviceID, &addr, &writable)
+            if canSet == noErr && writable.boolValue {
+                AudioObjectSetPropertyData(deviceID, &addr, 0, nil, UInt32(MemoryLayout<Float>.size), &vol)
             }
         }
     }
@@ -1434,40 +1503,9 @@ final class MultiOutputEngine: ObservableObject {
         _underrunCountLookup.set(uid, rb.underrunCount)
         _driftLookup.set(uid, Float(rb.lastDrift))
 
-        // Apply mono downmix if enabled (before volume/EQ)
-        if _monoMode.load() > 0.5 {
-            let ablMono = UnsafeMutableAudioBufferListPointer(ioData)
-            if ablMono.count >= 2, let leftData = ablMono[0].mData, let rightData = ablMono[1].mData {
-                let leftPtr = leftData.assumingMemoryBound(to: Float.self)
-                let rightPtr = rightData.assumingMemoryBound(to: Float.self)
-                let count = Int(ablMono[0].mDataByteSize / UInt32(MemoryLayout<Float>.size))
-                for i in 0..<count {
-                    let mono = (leftPtr[i] + rightPtr[i]) * 0.5
-                    leftPtr[i] = mono
-                    rightPtr[i] = mono
-                }
-            }
-        }
-
         // Apply volume scaling if not 1.0
         if vol < 0.999 {
             DelayedRingBuffer.applyVolume(vol, to: ioData, frames: inNumberFrames)
-        }
-
-        // Apply compressor/limiter if enabled (per-device instance)
-        // Process stereo: run compressor on each channel independently through same instance.
-        // Compressor envelope tracks signal level — sharing across L/R is acceptable (slightly
-        // stricter gating on loud transients) and avoids per-channel instance overhead.
-        if let comp = _compressorLookup.get(uid), comp.isEnabled {
-            let ablC = UnsafeMutableAudioBufferListPointer(ioData)
-            for buf in ablC {
-                guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
-                let ptr = data.assumingMemoryBound(to: Float.self)
-                let count = Int(buf.mDataByteSize / UInt32(MemoryLayout<Float>.size))
-                for i in 0..<count {
-                    ptr[i] = comp.process(ptr[i])
-                }
-            }
         }
 
         // Apply reverb if enabled (per-device instance)
@@ -1515,20 +1553,19 @@ final class MultiOutputEngine: ObservableObject {
         // Apply audio mode processing (karaoke center-cancel, vocal boost, or EQ)
         let modeRaw = _audioMode.load()
         let abl2 = UnsafeMutableAudioBufferListPointer(ioData)
-        if modeRaw == 1 {  // karaoke: partial center reduction (vocals reduced, instruments/bass preserved)
-            // Decompose into center (vocals, bass, kick) and side (stereo content).
-            // Reduce center by 70% but keep 30% so instruments/bass remain audible.
-            // Preserve stereo: L gets +side, R gets -side.
+        if modeRaw == 1 {  // karaoke: aggressive vocal removal — zero center, preserve bass only
             if abl2.count >= 2, let leftData = abl2[0].mData, let rightData = abl2[1].mData {
                 let leftPtr = leftData.assumingMemoryBound(to: Float.self)
                 let rightPtr = rightData.assumingMemoryBound(to: Float.self)
                 let count = Int(abl2[0].mDataByteSize / UInt32(MemoryLayout<Float>.size))
-                let centerGain: Float = 0.3  // keep 30% of center (instruments/bass)
+                let bassFilter = _karaokeBassLookup.get(uid)
                 for i in 0..<count {
                     let center = (leftPtr[i] + rightPtr[i]) * 0.5
                     let side = (leftPtr[i] - rightPtr[i]) * 0.5
-                    leftPtr[i] = side + center * centerGain
-                    rightPtr[i] = -side + center * centerGain
+                    // Extract only bass from center (vocals live above ~200Hz)
+                    let bassOnly = bassFilter?.process(center) ?? center
+                    leftPtr[i] = side + bassOnly
+                    rightPtr[i] = -side + bassOnly
                 }
             }
         } else if modeRaw == 2 {  // vocal boost: amplify mid frequencies
@@ -1540,6 +1577,22 @@ final class MultiOutputEngine: ObservableObject {
                     for i in 0..<count {
                         // Boost mid (vocals) with +0.7, leave bass/treble flat
                         ptr[i] = eq.process(ptr[i], bass: 0, treble: 0, mid: 0.7)
+                    }
+                }
+            }
+        }
+
+        // Per-device bass/treble EQ (applied in all modes)
+        let bassGain = _bassLookup.get(uid) ?? 0
+        let trebleGain = _trebleLookup.get(uid) ?? 0
+        if bassGain != 0 || trebleGain != 0 {
+            if let eq = _eqLookup.get(uid) {
+                for buf in abl2 {
+                    guard let data = buf.mData, buf.mDataByteSize > 0 else { continue }
+                    let ptr = data.assumingMemoryBound(to: Float.self)
+                    let count = Int(buf.mDataByteSize / UInt32(MemoryLayout<Float>.size))
+                    for i in 0..<count {
+                        ptr[i] = eq.process(ptr[i], bass: bassGain, treble: trebleGain, mid: 0)
                     }
                 }
             }

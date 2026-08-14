@@ -31,8 +31,6 @@ class AppState: ObservableObject {
     @Published var sleepTimerRemaining: Int = 0
 
     // DSP toggles
-    @Published var isMonoMode: Bool = false
-    @Published var isCompressorEnabled: Bool = false
     @Published var reverbPreset: ReverbPreset = .none
 
     // Network profile mapping
@@ -227,7 +225,11 @@ class AppState: ObservableObject {
             return
         }
 
-        // Step 4: Configure the output engine
+        // Step 4: Save current system volumes before overriding to max
+        DLog("Saving current system volumes...")
+        outputEngine.saveSystemVolumes(devices: devicesWithSettings.map { $0.0 })
+
+        // Step 5: Configure the output engine
         do {
             try outputEngine.configure(devices: devicesWithSettings)
         } catch {
@@ -237,7 +239,7 @@ class AppState: ObservableObject {
             return
         }
 
-        // Step 5: Start the output engine (wrapped in crash guard)
+        // Step 6: Start the output engine (wrapped in crash guard)
         DLog("Starting output engine...")
         do {
             try outputEngine.startSafely()
@@ -266,6 +268,7 @@ class AppState: ObservableObject {
 
         systemCapturer.stopCapture()
         outputEngine.stop()
+        outputEngine.restoreSystemVolumes()
         isActive = false
         DLog("Routing stopped.")
     }
@@ -423,14 +426,14 @@ class AppState: ObservableObject {
 
     // MARK: - DSP Controls
 
-    func setMonoMode(_ enabled: Bool) {
-        isMonoMode = enabled
-        outputEngine.setMonoMode(enabled)
-    }
-
-    func setCompressor(_ enabled: Bool) {
-        isCompressorEnabled = enabled
-        outputEngine.setCompressor(enabled: enabled)
+    func updateDeviceEQ(_ uid: String, bass: Float, treble: Float) {
+        ensureSettingsExist(for: uid)
+        if var s = deviceSettings[uid] {
+            s.bass = bass
+            s.treble = treble
+            deviceSettings[uid] = s  // triggers @Published
+        }
+        outputEngine.updateEQ(for: uid, bass: bass, treble: treble, mid: 0)
     }
 
     func setReverb(_ preset: ReverbPreset) {

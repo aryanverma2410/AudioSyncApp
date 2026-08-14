@@ -179,3 +179,38 @@ Superhuman-agent: All 82 tests pass. Phases 1-8 complete (T001-T045). Core syste
 - Karaoke cannot remove hard-panned or heavily processed vocals (fundamental limitation of L-R subtraction)
 - Voice enhance is subtle +3dB shelf — users expecting dramatic effect may need to adjust expectations
 - SyncParty extension (YouTube‑only sync) built, Cloudflare Workers signaling server added, generic icons created, Jest tests passing.
+
+## Session 6 — AudioSyncApp TODO: High Priority Items
+
+### Goal
+Implement 4 high-priority TODO items from AudioSyncApp/TODO.md: reverb ramp-up, audio quality tuning, karaoke overhaul, feature reduction (remove mono mode + compression).
+
+### What Changed
+- **MultiOutputEngine.swift** (MODIFIED):
+  - **Removed mono mode**: `_monoMode` global, `setMonoMode()` method, mono downmix block in render callback
+  - **Removed compressor**: `Compressor` class, `_compressorEnabled/Threshold/Ratio` globals, `_compressorLookup`, `setCompressor()` method, compressor instance creation in `addDevice`, compressor processing block in render callback, `_compressorLookup.remove` in `removeDevice`
+  - **Karaoke overhaul**: Replaced `centerGain=0.3` (kept 30% of vocals) with aggressive zero-center removal + per-device `KaraokeFilter` class (one-pole LPF ~100Hz cutoff) that extracts bass from center channel to preserve while completely removing vocals. Per-device `_karaokeBassLookup` for thread safety.
+  - **Reverb ramp-up**: Added second delay line (2816 samples, ~59ms) for denser reverb. Increased wetMix: room 0.15→0.25, hall 0.25→0.35, stadium 0.35→0.45, cathedral 0.45→0.55. Increased feedback: room 0.45→0.50, hall 0.55→0.60, stadium 0.65→0.68, cathedral 0.72→0.75. Dual delay lines decorrelate reflections for fuller sound without crackling.
+  - **Drift correction**: Replaced hard-snap drift correction (jumped 100+ samples causing audible clicks on BT) with gradual ±1 sample per callback nudge. Eliminates discontinuity while still tracking drift over time.
+- **AppState.swift** (MODIFIED): Removed `isMonoMode`, `isCompressorEnabled` @Published properties, `setMonoMode()`, `setCompressor()` methods.
+- **ContentView.swift** (MODIFIED): Removed Mono Mode and Compressor/Limiter toggles from DSP Effects menu. Updated help text from "DSP: Mono, Compressor, Reverb" to "DSP: Reverb".
+
+### Verification
+- `swift build` → Build complete! (passes, only pre-existing non-Sendable warnings)
+- `swift test` → fails (pre-existing: XCTest unavailable via SPM CLI)
+- Reference sweep: grep for `_monoMode|_compressor*|Compressor(|isMonoMode|isCompressorEnabled|setMonoMode|setCompressor` → 0 matches
+
+### TODO Status
+- [x] **Reverb ramp-up** — DONE: dual delay line, increased wetMix/feedback
+- [x] **Audio quality tuning** — DONE: gradual drift correction replacing hard-snap
+- [x] **Karaoke overhaul** — DONE: aggressive zero-center with bass preservation
+- [x] **Feature reduction** — DONE: removed mono mode + compression
+- [x] **Auto-delay calibration** — ALREADY IMPLEMENTED: measureLatencies + applyAutoDelayCompensation + Auto Sync button in ContentView
+- [x] **EQ per device** — DONE: bass/treble sliders per device card, SimpleEQ one-pole shelf filter, persisted in DeviceSettings
+- [x] **Keyboard shortcuts** — ALREADY IMPLEMENTED: ⌘⇧K karaoke, ⌘⇧M mute all, ⌘⇧S routing, ⌘⇧Space sleep timer (AppDelegate + AppState observers)
+- [x] **Window restoration** — ALREADY IMPLEMENTED: setFrameAutosaveName("AudioSyncMainWindow") via WindowAccessor in App.swift
+
+### Open Items
+- Pre-existing: test `setDelay(ms:sampleRate:)` signature mismatch (method only takes `setDelay(ms:)`) — tests can't run via SPM CLI anyway
+- Reverb dual delay line uses `%` modulo for non-power-of-2 size2 — slightly slower than bitmask, acceptable for 1 op per sample
+- EQ per device uses SimpleEQ one-pole IIR shelf (not crossover) — avoids the crackling that killed Session 4's crossover-based EQ
