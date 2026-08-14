@@ -229,7 +229,7 @@ class AppState: ObservableObject {
         DLog("Saving current system volumes...")
         outputEngine.saveSystemVolumes(devices: devicesWithSettings.map { $0.0 })
 
-        // Step 5: Configure the output engine
+        // Step 5: Configure the output engine (sets per-device volumes to max)
         do {
             try outputEngine.configure(devices: devicesWithSettings)
         } catch {
@@ -238,6 +238,9 @@ class AppState: ObservableObject {
             systemCapturer.stopCapture()
             return
         }
+
+        // Step 5b: Set the current default output device volume to max (NC slider)
+        outputEngine.setDefaultDeviceVolumeMax()
 
         // Step 6: Start the output engine (wrapped in crash guard)
         DLog("Starting output engine...")

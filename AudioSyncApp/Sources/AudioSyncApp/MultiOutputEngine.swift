@@ -1372,8 +1372,11 @@ final class MultiOutputEngine: ObservableObject {
 
     // Saved system volumes for restore on stop: [deviceID: volume]
     private var savedSystemVolumes: [AudioObjectID: Float] = [:]
+    private var savedDefaultDeviceVolume: Float = 1.0
+    private var savedDefaultDeviceID: AudioObjectID = 0
 
     /// Read current system volume for each device and save it.
+    /// Also saves the default output device's volume (NC slider).
     /// Call BEFORE configuring the engine (which sets volumes to max).
     @MainActor
     func saveSystemVolumes(devices: [AudioOutputDevice]) {
@@ -1382,6 +1385,18 @@ final class MultiOutputEngine: ObservableObject {
             let vol = Self.readDeviceVolume(device.id)
             savedSystemVolumes[device.id] = vol
             DLog("[Volume] Saved '\(device.name)' system volume: \(vol)")
+        }
+        // Save the default output device volume (what NC slider controls)
+        var defaultID: AudioObjectID = 0
+        var sz = UInt32(MemoryLayout<AudioObjectID>.size)
+        var defAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        if AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &defAddr, 0, nil, &sz, &defaultID) == noErr, defaultID != 0 {
+            savedDefaultDeviceID = defaultID
+            savedDefaultDeviceVolume = Self.readDeviceVolume(defaultID)
+            DLog("[Volume] Saved default device (id=\(defaultID)) volume: \(savedDefaultDeviceVolume)")
         }
     }
 
@@ -1392,7 +1407,32 @@ final class MultiOutputEngine: ObservableObject {
             Self.setDeviceVolume(deviceID, vol)
             DLog("[Volume] Restored device \(deviceID) system volume to \(vol)")
         }
+        // Restore default device volume (NC slider)
+        if savedDefaultDeviceID != 0 {
+            Self.setDeviceVolume(savedDefaultDeviceID, savedDefaultDeviceVolume)
+            DLog("[Volume] Restored default device (id=\(savedDefaultDeviceID)) volume to \(savedDefaultDeviceVolume)")
+        }
         savedSystemVolumes.removeAll()
+        savedDefaultDeviceID = 0
+        savedDefaultDeviceVolume = 1.0
+    }
+
+    /// Set the current default output device's volume to max.
+    /// This is the device the macOS notification center volume slider controls.
+    @MainActor
+    func setDefaultDeviceVolumeMax() {
+        var defaultID: AudioObjectID = 0
+        var sz = UInt32(MemoryLayout<AudioObjectID>.size)
+        var defAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &defAddr, 0, nil, &sz, &defaultID) == noErr, defaultID != 0 else {
+            DLog("[Volume] Could not read default output device")
+            return
+        }
+        Self.setDeviceVolume(defaultID, 1.0)
+        DLog("[Volume] Set default device (id=\(defaultID)) volume to max")
     }
 
     /// Read a device's current system volume (0...1). Tries VirtualMasterVolume first
