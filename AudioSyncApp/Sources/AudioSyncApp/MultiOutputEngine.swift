@@ -1380,11 +1380,12 @@ final class MultiOutputEngine: ObservableObject {
     /// Read current system volume for each device and save it.
     /// Also saves the default output device's volume (NC slider).
     /// Call BEFORE configuring the engine (which sets volumes to max).
+    /// captureDeviceID is excluded to avoid interfering with the capture IOProc.
     @MainActor
-    func saveSystemVolumes(devices: [AudioOutputDevice]) {
+    func saveSystemVolumes(devices: [AudioOutputDevice], captureDeviceID: AudioObjectID? = nil) {
         savedSystemVolumes.removeAll()
         savedMuteStates.removeAll()
-        for device in devices {
+        for device in devices where device.id != captureDeviceID {
             let vol = Self.readDeviceVolume(device.id)
             savedSystemVolumes[device.id] = vol
             let muted = Self.readDeviceMute(device.id)

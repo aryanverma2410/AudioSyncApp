@@ -227,10 +227,12 @@ class AppState: ObservableObject {
 
         // Step 4: Save current system volumes for ALL devices before overriding to max
         DLog("Saving current system volumes...")
-        outputEngine.saveSystemVolumes(devices: deviceDiscovery.devices)
+        outputEngine.saveSystemVolumes(devices: deviceDiscovery.devices, captureDeviceID: systemCapturer.activeCaptureDeviceID)
 
-        // Step 4b: Set ALL output devices to max volume (including disabled ones)
-        for device in deviceDiscovery.devices {
+        // Step 4b: Set ALL output devices to max volume (including disabled ones),
+        // but EXCLUDE the capture device (BlackHole) — changing its volume/mute
+        // can interfere with its capture IOProc.
+        for device in deviceDiscovery.devices where device.id != captureDeviceID {
             outputEngine.setDeviceVolumeToMax(device.id)
         }
 
