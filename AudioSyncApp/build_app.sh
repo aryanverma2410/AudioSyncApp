@@ -13,6 +13,34 @@ APP_BUNDLE="AudioSyncApp.app"
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
+# Create Info.plist (stable bundle identity across rebuilds)
+cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>AudioSyncApp</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.audiosync.app</string>
+    <key>CFBundleVersion</key>
+    <string>1.2</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.2</string>
+    <key>CFBundleExecutable</key>
+    <string>AudioSyncApp</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>AudioSyncApp needs microphone access for acoustic calibration.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>AudioSyncApp needs screen recording permission to capture system audio for routing to multiple speakers.</string>
+</dict>
+</plist>
+PLIST
+
 # Copy binary
 cp -f .build/debug/AudioSyncApp "$APP_BUNDLE/Contents/MacOS/AudioSyncApp"
 chmod +x "$APP_BUNDLE/Contents/MacOS/AudioSyncApp"

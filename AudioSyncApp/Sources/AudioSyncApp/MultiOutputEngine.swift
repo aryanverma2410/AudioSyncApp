@@ -1417,6 +1417,12 @@ final class MultiOutputEngine: ObservableObject {
         savedDefaultDeviceVolume = 1.0
     }
 
+    /// Set a specific device's system volume to max (public wrapper).
+    @MainActor
+    func setDeviceVolumeToMax(_ deviceID: AudioObjectID) {
+        Self.setDeviceVolumeMax(deviceID)
+    }
+
     /// Set the current default output device's volume to max.
     /// This is the device the macOS notification center volume slider controls.
     @MainActor

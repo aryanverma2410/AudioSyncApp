@@ -225,9 +225,14 @@ class AppState: ObservableObject {
             return
         }
 
-        // Step 4: Save current system volumes before overriding to max
+        // Step 4: Save current system volumes for ALL devices before overriding to max
         DLog("Saving current system volumes...")
-        outputEngine.saveSystemVolumes(devices: devicesWithSettings.map { $0.0 })
+        outputEngine.saveSystemVolumes(devices: deviceDiscovery.devices)
+
+        // Step 4b: Set ALL output devices to max volume (including disabled ones)
+        for device in deviceDiscovery.devices {
+            outputEngine.setDeviceVolumeToMax(device.id)
+        }
 
         // Step 5: Configure the output engine (sets per-device volumes to max)
         do {
