@@ -1392,17 +1392,20 @@ final class MultiOutputEngine: ObservableObject {
             savedMuteStates[device.id] = muted
             DLog("[Volume] Saved '\(device.name)' system volume: \(vol), muted: \(muted)")
         }
-        // Save the default output device volume (what NC slider controls)
-        var defaultID: AudioObjectID = 0
-        var sz = UInt32(MemoryLayout<AudioObjectID>.size)
-        var defAddr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        if AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &defAddr, 0, nil, &sz, &defaultID) == noErr, defaultID != 0 {
-            savedDefaultDeviceID = defaultID
-            savedDefaultDeviceVolume = Self.readDeviceVolume(defaultID)
-            DLog("[Volume] Saved default device (id=\(defaultID)) volume: \(savedDefaultDeviceVolume)")
+        // Save the default output device volume (what NC slider controls),
+        // but skip if the default is the capture device (BlackHole) — we don't touch it.
+        if let capID = captureDeviceID {
+            var defaultID: AudioObjectID = 0
+            var sz = UInt32(MemoryLayout<AudioObjectID>.size)
+            var defAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            if AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &defAddr, 0, nil, &sz, &defaultID) == noErr, defaultID != 0, defaultID != capID {
+                savedDefaultDeviceID = defaultID
+                savedDefaultDeviceVolume = Self.readDeviceVolume(defaultID)
+                DLog("[Volume] Saved default device (id=\(defaultID)) volume: \(savedDefaultDeviceVolume)")
+            }
         }
     }
 

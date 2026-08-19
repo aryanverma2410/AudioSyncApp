@@ -246,9 +246,6 @@ class AppState: ObservableObject {
             return
         }
 
-        // Step 5b: Set the current default output device volume to max (NC slider)
-        outputEngine.setDefaultDeviceVolumeMax()
-
         // Step 6: Start the output engine (wrapped in crash guard)
         DLog("Starting output engine...")
         do {
