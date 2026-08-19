@@ -1374,6 +1374,8 @@ final class MultiOutputEngine: ObservableObject {
     private var savedSystemVolumes: [AudioObjectID: Float] = [:]
     private var savedDefaultDeviceVolume: Float = 1.0
     private var savedDefaultDeviceID: AudioObjectID = 0
+    // Saved mute state: [deviceID: wasMuted]
+    private var savedMuteStates: [AudioObjectID: Bool] = [:]
 
     /// Read current system volume for each device and save it.
     /// Also saves the default output device's volume (NC slider).
@@ -1381,10 +1383,13 @@ final class MultiOutputEngine: ObservableObject {
     @MainActor
     func saveSystemVolumes(devices: [AudioOutputDevice]) {
         savedSystemVolumes.removeAll()
+        savedMuteStates.removeAll()
         for device in devices {
             let vol = Self.readDeviceVolume(device.id)
             savedSystemVolumes[device.id] = vol
-            DLog("[Volume] Saved '\(device.name)' system volume: \(vol)")
+            let muted = Self.readDeviceMute(device.id)
+            savedMuteStates[device.id] = muted
+            DLog("[Volume] Saved '\(device.name)' system volume: \(vol), muted: \(muted)")
         }
         // Save the default output device volume (what NC slider controls)
         var defaultID: AudioObjectID = 0
@@ -1400,12 +1405,18 @@ final class MultiOutputEngine: ObservableObject {
         }
     }
 
-    /// Restore previously saved system volumes after routing stops.
+    /// Restore previously saved system volumes and mute states after routing stops.
     @MainActor
     func restoreSystemVolumes() {
         for (deviceID, vol) in savedSystemVolumes {
             Self.setDeviceVolume(deviceID, vol)
-            DLog("[Volume] Restored device \(deviceID) system volume to \(vol)")
+            // Restore mute state
+            if let wasMuted = savedMuteStates[deviceID] {
+                Self.setDeviceMute(deviceID, wasMuted)
+                DLog("[Volume] Restored device \(deviceID) volume to \(vol), muted: \(wasMuted)")
+            } else {
+                DLog("[Volume] Restored device \(deviceID) volume to \(vol)")
+            }
         }
         // Restore default device volume (NC slider)
         if savedDefaultDeviceID != 0 {
@@ -1413,13 +1424,15 @@ final class MultiOutputEngine: ObservableObject {
             DLog("[Volume] Restored default device (id=\(savedDefaultDeviceID)) volume to \(savedDefaultDeviceVolume)")
         }
         savedSystemVolumes.removeAll()
+        savedMuteStates.removeAll()
         savedDefaultDeviceID = 0
         savedDefaultDeviceVolume = 1.0
     }
 
-    /// Set a specific device's system volume to max (public wrapper).
+    /// Set a specific device's system volume to max and unmute it (public wrapper).
     @MainActor
     func setDeviceVolumeToMax(_ deviceID: AudioObjectID) {
+        Self.setDeviceMute(deviceID, false)
         Self.setDeviceVolumeMax(deviceID)
     }
 
@@ -1437,8 +1450,9 @@ final class MultiOutputEngine: ObservableObject {
             DLog("[Volume] Could not read default output device")
             return
         }
+        Self.setDeviceMute(defaultID, false)
         Self.setDeviceVolume(defaultID, 1.0)
-        DLog("[Volume] Set default device (id=\(defaultID)) volume to max")
+        DLog("[Volume] Set default device (id=\(defaultID)) volume to max, unmuted")
     }
 
     /// Read a device's current system volume (0...1). Tries VirtualMasterVolume first
@@ -1504,6 +1518,53 @@ final class MultiOutputEngine: ObservableObject {
                 AudioObjectSetPropertyData(deviceID, &addr, 0, nil, UInt32(MemoryLayout<Float>.size), &vol)
             }
         }
+    }
+
+    /// Read a device's current mute state. Tries master channel first,
+    /// falls back to channel 0.
+    private static func readDeviceMute(_ deviceID: AudioObjectID) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var muted: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        if AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &muted) == noErr {
+            return muted != 0
+        }
+        // Fallback: channel 0
+        addr.mElement = 0
+        if AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &muted) == noErr {
+            return muted != 0
+        }
+        return false
+    }
+
+    /// Set a device's mute state. Tries master channel first, falls back to channels 0+1.
+    private static func setDeviceMute(_ deviceID: AudioObjectID, _ muted: Bool) {
+        var val: UInt32 = muted ? 1 : 0
+        let size = UInt32(MemoryLayout<UInt32>.size)
+        // Try master element
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var writable: DarwinBoolean = false
+        if AudioObjectIsPropertySettable(deviceID, &addr, &writable) == noErr && writable.boolValue {
+            if AudioObjectSetPropertyData(deviceID, &addr, 0, nil, size, &val) == noErr {
+                DLog("[Mute] Set device \(deviceID) muted=\(muted) (master)")
+                return
+            }
+        }
+        // Fallback: per-channel
+        for ch in [0, 1] {
+            addr.mElement = UInt32(ch)
+            writable = false
+            if AudioObjectIsPropertySettable(deviceID, &addr, &writable) == noErr && writable.boolValue {
+                AudioObjectSetPropertyData(deviceID, &addr, 0, nil, size, &val)
+            }
+        }
+        DLog("[Mute] Set device \(deviceID) muted=\(muted) (per-channel)")
     }
 
     // MARK: - HAL Render Callback
