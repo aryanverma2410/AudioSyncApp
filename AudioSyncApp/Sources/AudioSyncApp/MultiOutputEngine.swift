@@ -523,6 +523,7 @@ final class MultiOutputEngine: ObservableObject {
     @Published var isRunning = false
     @Published var activeDeviceCount = 0
     @Published var cpuUsage: Double = 0
+    private var cpuOverloadCount = 0
 
     private var deviceOutputs: [String: DeviceOutput] = [:]
 
@@ -1802,11 +1803,19 @@ final class MultiOutputEngine: ObservableObject {
             let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
             if let value = Double(output.components(separatedBy: .whitespaces).first ?? "0") {
                 cpuUsage = min(value, 100.0)
-                if cpuUsage > 80 {
-                    _cpuOverloadFlag.store(1)
-                    DLog("[CPU Guard] Overload detected (\(String(format: "%.1f", cpuUsage))%) — outputting silence")
-                } else if cpuUsage < 60 {
-                    _cpuOverloadFlag.store(0)
+                // Require sustained overload (3 consecutive readings >95%) before silencing.
+                // A single spike from starting HAL units should not kill audio.
+                if cpuUsage > 95 {
+                    cpuOverloadCount += 1
+                    if cpuOverloadCount >= 3 {
+                        _cpuOverloadFlag.store(1)
+                        DLog("[CPU Guard] Sustained overload (\(String(format: "%.1f", cpuUsage))%) — outputting silence")
+                    }
+                } else {
+                    cpuOverloadCount = 0
+                    if cpuUsage < 70 {
+                        _cpuOverloadFlag.store(0)
+                    }
                 }
             } else {
                 cpuUsage = 0
