@@ -1,5 +1,6 @@
 # Build artifacts
 .build/
+.swiftpm/
 DerivedData/
 *.xcuserdata
 *.xcodeproj/*
@@ -28,3 +29,11 @@ venv/
 
 # macOS
 .DS_Store
+
+# App bundles and DMGs
+AudioSyncApp/AudioSyncApp.app/
+AudioSyncApp/AudioSync.dmg
+AudioSyncApp/dist/
+
+# Backup and temp files
+*.backup
