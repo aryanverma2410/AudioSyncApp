@@ -39,6 +39,7 @@ final class SystemAudioCapturer: NSObject, ObservableObject {
     var _captureDeviceID: AudioObjectID { captureDeviceID }
     private var ioProcID: AudioDeviceIOProcID?
     private var originalDefaultDeviceID: AudioObjectID = 0
+    private var originalSystemDefaultDeviceID: AudioObjectID = 0
     private var didSetBlackHoleAsDefault = false
 
     /// The ID of the device being used for capture (nil if not capturing or using SCStream)
@@ -155,6 +156,23 @@ extension SystemAudioCapturer {
         didSetBlackHoleAsDefault = (defaultID != deviceID)
         DLog("[Capture] Set virtual device as default output")
 
+        // Also redirect system sounds (alerts, notifications) through BlackHole.
+        // macOS keeps DefaultOutputDevice and DefaultSystemOutputDevice separate —
+        // without this, system sounds bypass BlackHole and play from built-in speakers.
+        var sysAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var sysDefaultID: AudioObjectID = 0
+        var sysSz = UInt32(MemoryLayout<AudioObjectID>.size)
+        if AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &sysAddr, 0, nil, &sysSz, &sysDefaultID) == noErr {
+            originalSystemDefaultDeviceID = sysDefaultID
+            if sysDefaultID != deviceID {
+                AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &sysAddr, 0, nil, UInt32(MemoryLayout<AudioObjectID>.size), &bhID)
+                DLog("[Capture] Set virtual device as default system output (was id=\(sysDefaultID))")
+            }
+        }
+
         // Create IOProc
         var procID: AudioDeviceIOProcID?
         let createStatus = AudioDeviceCreateIOProcID(deviceID, Self.coreAudioIOProc, Unmanaged.passUnretained(self).toOpaque(), &procID)
@@ -204,6 +222,18 @@ extension SystemAudioCapturer {
         } else {
             DLog("[Capture] ERROR: Can't restore default device (\(status))")
         }
+
+        // Restore system output device too
+        if originalSystemDefaultDeviceID != 0 {
+            var sysAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            var sysDevID = originalSystemDefaultDeviceID
+            AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &sysAddr, 0, nil, UInt32(MemoryLayout<AudioObjectID>.size), &sysDevID)
+            DLog("[Capture] Restored system default device id=\(originalSystemDefaultDeviceID)")
+        }
+
         didSetBlackHoleAsDefault = false
     }
 

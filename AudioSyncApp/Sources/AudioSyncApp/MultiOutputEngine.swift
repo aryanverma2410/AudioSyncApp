@@ -2,6 +2,7 @@ import Foundation
 @preconcurrency import AVFoundation
 import CoreAudio
 import AudioToolbox
+import Accelerate
 import Darwin
 
 // MARK: - Audio Constants
@@ -126,7 +127,21 @@ final class DelayedRingBuffer: @unchecked Sendable {
     var frameCountValue: Int { frameCount }
 
     func setDelay(ms: Float) {
-        _delayFrames = Int(Double(ms) / 1000.0 * bufferSampleRate)
+        let newDelay = Int(Double(ms) / 1000.0 * bufferSampleRate)
+        let oldDelay = _delayFrames
+        _delayFrames = newDelay
+        
+        // Immediately adjust read position to reflect the new delay.
+        // Without this, the ±1 sample/callback drift correction would take
+        // ~100 seconds to converge for a 200ms change (9600 samples at 48kHz).
+        let delta = newDelay - oldDelay
+        if delta != 0 {
+            // Moving readPos forward (larger delay = read further behind writer)
+            // Moving readPos backward (smaller delay = read closer to writer)
+            OSMemoryBarrier()
+            let wp = _writePos
+            _readPos = max(_readPos - delta, wp - frameCount + safetyFrames)
+        }
     }
 
     /// Current write position (for diagnostics / auto-delay measurement)
@@ -353,18 +368,104 @@ private let _crossoverLPFLookup = ThreadSafeLookup<String, CrossoverLPF>()
 // Per-device reverb instances (each HAL thread gets its own)
 private let _reverbLookup = ThreadSafeLookup<String, Reverb>()
 
-// Aggressive karaoke: extracts bass from center channel to preserve while removing vocals
-private final class KaraokeFilter: @unchecked Sendable {
-    private var _lpfZ: Float = 0
-    private let _alpha: Float = 0.99  // ~100Hz cutoff at 48kHz — preserves bass/kick, cuts vocals
+// MARK: - vDSP Karaoke Engine
+// 4-stage pipeline adapted from the DSP blueprint:
+// Stage 1: vDSP Mid/Side split (vDSP_vadd, vDSP_vsub, vDSP_vsmul)
+// Stage 2: Vocal gating — aggressive suppression of center-channel vocals
+// Stage 3: Instrumental boost — gain on side channel + controlled mid floor
+// Stage 4: vDSP stereo reassembly + hard clip (vDSP_vclip)
+// All buffers pre-allocated — zero malloc in render loop.
 
+private final class KaraokeEngine: @unchecked Sendable {
+    // Pre-allocated vDSP working buffers (max 512 frames per callback)
+    private var midBuffer: UnsafeMutablePointer<Float>
+    private var sideBuffer: UnsafeMutablePointer<Float>
+    private var bassBuffer: UnsafeMutablePointer<Float>
+    private let capacity: Int
+
+    // Bass preservation LPF state (same concept as old KaraokeFilter)
+    private var _lpfZ: Float = 0
+    private let _alpha: Float = 0.99  // ~100Hz cutoff at 48kHz
+
+    // Constants from the blueprint
+    private let vocalKillGate: Float = 0.012    // Aggressive suppression factor
+    private let instrumentalBoost: Float = 1.68  // ~4.5dB gain boost
+    private let sideBoostFactor: Float = 1.25   // Extra side-width boost
+    private let midBoostFactor: Float = 0.70    // Controlled center floor
+
+    init() {
+        capacity = 512
+        midBuffer = .allocate(capacity: capacity)
+        sideBuffer = .allocate(capacity: capacity)
+        bassBuffer = .allocate(capacity: capacity)
+        midBuffer.initialize(repeating: 0, count: capacity)
+        sideBuffer.initialize(repeating: 0, count: capacity)
+        bassBuffer.initialize(repeating: 0, count: capacity)
+    }
+
+    deinit {
+        midBuffer.deallocate()
+        sideBuffer.deallocate()
+        bassBuffer.deallocate()
+    }
+
+    /// Process a stereo buffer in-place using vDSP-accelerated karaoke pipeline.
+    /// leftPtr / rightPtr are modified in-place.
     @inline(__always)
-    func process(_ center: Float) -> Float {
-        _lpfZ = _alpha * _lpfZ + (1 - _alpha) * center
-        return _lpfZ  // bass-only portion of center
+    func process(leftPtr: UnsafeMutablePointer<Float>,
+                 rightPtr: UnsafeMutablePointer<Float>,
+                 frames: Int) {
+        let n = min(frames, capacity)
+        guard n > 0 else { return }
+
+        // ── STAGE 1: vDSP Mid/Side Split ──
+        // Mid = (L + R) * 0.5
+        vDSP_vadd(leftPtr, 1, rightPtr, 1, midBuffer, 1, vDSP_Length(n))
+        var half: Float = 0.5
+        vDSP_vsmul(midBuffer, 1, &half, midBuffer, 1, vDSP_Length(n))
+
+        // Side = (L - R) * 0.5
+        vDSP_vsub(rightPtr, 1, leftPtr, 1, sideBuffer, 1, vDSP_Length(n))
+        vDSP_vsmul(sideBuffer, 1, &half, sideBuffer, 1, vDSP_Length(n))
+
+        // ── STAGE 2: Vocal Gating + Bass Preservation ──
+        // Extract bass from center channel (preserve kick/bass below ~100Hz)
+        // Then aggressively gate the remaining center (vocals live above ~200Hz)
+        for i in 0..<n {
+            // One-pole LPF to isolate bass from center
+            _lpfZ = _alpha * _lpfZ + (1 - _alpha) * midBuffer[i]
+            bassBuffer[i] = _lpfZ
+
+            // Vocal detection: if center energy exceeds threshold, suppress it
+            let centerWithoutBass = midBuffer[i] - bassBuffer[i]
+            if abs(centerWithoutBass) > 0.015 {
+                // Aggressive suppression: scale vocal content down to floor
+                midBuffer[i] = bassBuffer[i] + centerWithoutBass * vocalKillGate
+            }
+        }
+
+        // ── STAGE 3: Instrumental Boost ──
+        // Boost side (instruments/panning) aggressively
+        // Boost mid (remaining center) more conservatively
+        var sideGain = instrumentalBoost * sideBoostFactor  // 2.1
+        var midGain = instrumentalBoost * midBoostFactor    // 1.176
+        vDSP_vsmul(sideBuffer, 1, &sideGain, sideBuffer, 1, vDSP_Length(n))
+        vDSP_vsmul(midBuffer, 1, &midGain, midBuffer, 1, vDSP_Length(n))
+
+        // ── STAGE 4: Stereo Reassembly + Hard Clip ──
+        // Left = Mid + Side
+        vDSP_vadd(midBuffer, 1, sideBuffer, 1, leftPtr, 1, vDSP_Length(n))
+        // Right = Mid - Side
+        vDSP_vsub(sideBuffer, 1, midBuffer, 1, rightPtr, 1, vDSP_Length(n))
+
+        // Hard clip to [-1.0, 1.0] to prevent hardware distortion
+        var lo: Float = -1.0
+        var hi: Float = 1.0
+        vDSP_vclip(leftPtr, 1, &lo, &hi, leftPtr, 1, vDSP_Length(n))
+        vDSP_vclip(rightPtr, 1, &lo, &hi, rightPtr, 1, vDSP_Length(n))
     }
 }
-private let _karaokeBassLookup = ThreadSafeLookup<String, KaraokeFilter>()
+private let _karaokeLookup = ThreadSafeLookup<String, KaraokeEngine>()
 
 // Simple feedback reverb — one delay line with dampened feedback.
 // Far less CPU than Schroeder (1 delay vs 6), no crackling on BT.
@@ -1144,8 +1245,8 @@ final class MultiOutputEngine: ObservableObject {
         rev.setPreset(Reverb.Preset(rawValue: Int(_reverbPresetRaw.load())) ?? .none)
         _reverbLookup.set(device.uid, rev)
 
-        // Create per-device karaoke filter instance
-        _karaokeBassLookup.set(device.uid, KaraokeFilter())
+        // Create per-device karaoke engine instance (vDSP-accelerated)
+        _karaokeLookup.set(device.uid, KaraokeEngine())
 
         // Create per-device EQ instance (for bass/treble controls)
         _eqLookup.set(device.uid, SimpleEQ())
@@ -1205,7 +1306,7 @@ final class MultiOutputEngine: ObservableObject {
         _midLookup.remove(deviceUID)
         _eqLookup.remove(deviceUID)
         _reverbLookup.remove(deviceUID)
-        _karaokeBassLookup.remove(deviceUID)
+        _karaokeLookup.remove(deviceUID)
         deviceOutputs.removeValue(forKey: deviceUID)
         activeDeviceCount = deviceOutputs.count
     }
@@ -1662,23 +1763,17 @@ final class MultiOutputEngine: ObservableObject {
             }
         }
 
-        // Apply audio mode processing (karaoke center-cancel, vocal boost, or EQ)
+        // Apply audio mode processing (karaoke or vocal boost)
         let modeRaw = _audioMode.load()
         let abl2 = UnsafeMutableAudioBufferListPointer(ioData)
-        if modeRaw == 1 {  // karaoke: aggressive vocal removal — zero center, preserve bass only
-            if abl2.count >= 2, let leftData = abl2[0].mData, let rightData = abl2[1].mData {
-                let leftPtr = leftData.assumingMemoryBound(to: Float.self)
-                let rightPtr = rightData.assumingMemoryBound(to: Float.self)
-                let count = Int(abl2[0].mDataByteSize / UInt32(MemoryLayout<Float>.size))
-                let bassFilter = _karaokeBassLookup.get(uid)
-                for i in 0..<count {
-                    let center = (leftPtr[i] + rightPtr[i]) * 0.5
-                    let side = (leftPtr[i] - rightPtr[i]) * 0.5
-                    // Extract only bass from center (vocals live above ~200Hz)
-                    let bassOnly = bassFilter?.process(center) ?? center
-                    leftPtr[i] = side + bassOnly
-                    rightPtr[i] = -side + bassOnly
-                }
+        if modeRaw == 1, abl2.count >= 2,
+           let leftData = abl2[0].mData, let rightData = abl2[1].mData {
+            // karaoke: vDSP-accelerated vocal suppression + instrumental boost
+            let leftPtr = leftData.assumingMemoryBound(to: Float.self)
+            let rightPtr = rightData.assumingMemoryBound(to: Float.self)
+            let count = Int(abl2[0].mDataByteSize / UInt32(MemoryLayout<Float>.size))
+            if let engine = _karaokeLookup.get(uid) {
+                engine.process(leftPtr: leftPtr, rightPtr: rightPtr, frames: count)
             }
         } else if modeRaw == 2 {  // vocal boost: amplify mid frequencies
             if let eq = _eqLookup.get(uid) {
