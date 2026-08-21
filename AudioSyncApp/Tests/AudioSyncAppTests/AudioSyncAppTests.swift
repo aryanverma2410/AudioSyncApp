@@ -39,7 +39,7 @@ final class AudioSyncAppTests: XCTestCase {
 
     func testRingBufferSetDelay() {
         let buffer = DelayedRingBuffer()
-        buffer.setDelay(ms: 100, sampleRate: 48000)
+        buffer.setDelay(ms: 100)
         // No crash = success (delay is internal state)
     }
 
@@ -63,13 +63,13 @@ final class AudioSyncAppTests: XCTestCase {
 
     func testRingBufferZeroDelay() {
         let buffer = DelayedRingBuffer(capacitySeconds: 1.0, sampleRate: 48000)
-        buffer.setDelay(ms: 0, sampleRate: 48000)
+        buffer.setDelay(ms: 0)
         // Zero delay should be valid — read position equals write position
     }
 
     func testRingBufferLargeDelay() {
         let buffer = DelayedRingBuffer(capacitySeconds: 4.0, sampleRate: 48000)
-        buffer.setDelay(ms: 2000, sampleRate: 48000)  // Max delay
+        buffer.setDelay(ms: 2000)  // Max delay
         // Should fit within 4-second buffer capacity
     }
 

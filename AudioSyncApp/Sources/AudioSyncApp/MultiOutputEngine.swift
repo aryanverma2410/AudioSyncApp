@@ -126,7 +126,16 @@ final class DelayedRingBuffer: @unchecked Sendable {
     var frameCountValue: Int { frameCount }
 
     func setDelay(ms: Float) {
-        _delayFrames = Int(Double(ms) / 1000.0 * bufferSampleRate)
+        let newDelayFrames = Int(Double(ms) / 1000.0 * bufferSampleRate)
+        _delayFrames = newDelayFrames
+
+        // Immediately resync read position to the new delay distance.
+        // Without this, the ±1-sample drift correction takes thousands of
+        // callbacks to converge — slider feels non-responsive.
+        let wp = _writePos
+        if wp > 0 {
+            _readPos = max(wp - newDelayFrames - safetyFrames, 0)
+        }
     }
 
     /// Current write position (for diagnostics / auto-delay measurement)
