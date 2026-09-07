@@ -136,12 +136,16 @@ final class DelayedRingBuffer: @unchecked Sendable {
         if wp > 0 {
             _readPos = max(wp - newDelayFrames - safetyFrames, 0)
         }
+        // ARM64 store reordering: ensure reader sees new _delayFrames + _readPos atomically.
+        OSMemoryBarrier()
     }
 
     /// Current write position (for diagnostics / auto-delay measurement)
     var currentWritePos: Int { _writePos }
     /// Current read position (for diagnostics / auto-delay measurement)
     var currentReadPos: Int { _readPos }
+    /// Current delay in milliseconds (for diagnostics)
+    var currentDelayMs: Float { Float(Double(_delayFrames) / bufferSampleRate * 1000.0) }
 
     /// Write stereo audio. Called from IOProc (single writer).
     /// Resamples from the input buffer's sample rate to the ring buffer's native rate.
@@ -217,28 +221,39 @@ final class DelayedRingBuffer: @unchecked Sendable {
 
         var rp = _readPos
 
-        // Gradual drift correction: nudge read position by ±1 sample per callback.
-        // Hard-snap (jumping 100+ samples) caused audible clicks on BT speakers.
-        // Gradual correction eliminates discontinuity while still tracking drift.
+        // Gradual drift correction with tolerance band + proportional nudge.
+        // Direction: push readPos TOWARD totalBehind distance, not away.
         let currentDist = wp - rp
         lastDrift = currentDist - totalBehind
-        if currentDist < totalBehind {
-            rp += 1  // reader too close to writer — skip 1 sample to fall back
-        } else if currentDist > totalBehind + Int(frames) * 2 {
-            rp -= 1  // reader too far behind — repeat 1 sample to catch up
-            if rp < 0 { rp = 0 }
+        let driftTolerance = Int(frames)  // one callback worth — normal write/read jitter
+        let driftAmount = abs(currentDist - totalBehind)
+        if driftAmount > driftTolerance {
+            // ponytail: proportional nudge, capped at 256 samples to avoid audible clicks
+            let nudge = max(1, min(driftAmount / 64, 256))
+            if currentDist < totalBehind - driftTolerance {
+                // Reader too close to writer (distance too small).
+                // Fall back: repeat samples → rp decreases → distance grows.
+                rp -= nudge
+                if rp < 0 { rp = 0 }
+            } else {
+                // Reader too far behind writer (distance too large).
+                // Catch up: skip samples → rp increases → distance shrinks.
+                rp += nudge
+            }
         }
 
         // Catastrophic overrun: reader fell behind by more than the entire ring buffer.
-        // Only here do we hard-snap to avoid reading stale/wrapped data.
+        // Hard-snap to avoid reading stale/wrapped data, but preserve user-set delay.
         if wp - rp > frameCount {
-            rp = wp - safetyFrames
+            rp = max(wp - totalBehind, 0)
         }
 
-        // Underrun check: not enough data written yet
+        // Underrun check: not enough data between read and write positions.
+        // Output silence but advance readPos by frames to maintain delay distance.
+        // Old code snapped readPos to wp - totalBehind, overriding user-set delay.
         if wp - rp < Int(frames) {
             DelayedRingBuffer.fillSilence(ioData, frames: frames)
-            _readPos = max(rp, wp - totalBehind)
+            _readPos = rp + Int(frames)  // advance normally — preserves delay distance
             return
         }
 
@@ -299,6 +314,28 @@ private let _bufferLookup = ThreadSafeLookup<String, DelayedRingBuffer>()
 private let _volumeLookup = ThreadSafeLookup<String, Float>()
 private let _levelLookup = ThreadSafeLookup<String, Float>()  // VU meter: per-device peak level
 
+/// Pre-allocated snapshot of ring buffers for the audio-thread write path.
+/// Refreshed on add/removeDevice (MainActor), read lock-free on audio thread.
+/// Eliminates Array allocation on every IOProc callback.
+private final class RingBufferSnapshot: @unchecked Sendable {
+    private var _buffers: [DelayedRingBuffer] = []
+    private var _lock = os_unfair_lock_s()
+
+    func update(_ buffers: [DelayedRingBuffer]) {
+        os_unfair_lock_lock(&_lock)
+        _buffers = buffers
+        os_unfair_lock_unlock(&_lock)
+    }
+
+    /// Returns the current snapshot. Lock held briefly (no allocation — returns borrowed ref).
+    var buffers: [DelayedRingBuffer] {
+        os_unfair_lock_lock(&_lock)
+        defer { os_unfair_lock_unlock(&_lock) }
+        return _buffers
+    }
+}
+private let _ringBufferSnapshot = RingBufferSnapshot()
+
 // EQ coefficients: bass, treble, mid gain (-1...1) per device UID
 private let _bassLookup = ThreadSafeLookup<String, Float>()
 private let _trebleLookup = ThreadSafeLookup<String, Float>()
@@ -317,8 +354,6 @@ enum AudioMode: Int, Sendable {
 // Global audio mode — affects all devices
 private let _audioMode = AtomicFloat(0)  // 0=normal, 1=karaoke, 2=vocalBoost
 
-// CPU overload flag — set when CPU > 80%, cleared when it drops below 60%
-private let _cpuOverloadFlag = AtomicFloat(0)
 
 // Reverb settings (global, applied to per-device instances)
 private let _reverbPresetRaw = AtomicFloat(0)
@@ -532,9 +567,8 @@ final class MultiOutputEngine: ObservableObject {
     @Published var isRunning = false
     @Published var activeDeviceCount = 0
     @Published var cpuUsage: Double = 0
-    private var cpuOverloadCount = 0
 
-    private var deviceOutputs: [String: DeviceOutput] = [:]
+    var deviceOutputs: [String: DeviceOutput] = [:]
 
     private let engineFormat: AVAudioFormat = AVAudioFormat(standardFormatWithSampleRate: kEngineSampleRate, channels: 2)!
     private var cpuTimer: Timer?
@@ -684,7 +718,7 @@ final class MultiOutputEngine: ObservableObject {
         _lastTapPeak.store(peak)
         _captureBox.count += 1
 
-        for rb in _bufferLookup.allValues {
+        for rb in _ringBufferSnapshot.buffers {
             rb.write(buffer)
         }
     }
@@ -723,7 +757,13 @@ final class MultiOutputEngine: ObservableObject {
         }
 
         Self.volumeLookup.set(deviceUID, output.volume)
-        writeBeep(to: output.buffer, sampleRate: engineFormat.sampleRate)
+
+        // Write beep to ALL ring buffers to keep writePos synchronized.
+        // Only the target device's HAL unit is running, so the beep is only audible there.
+        // Writing to one buffer alone desyncs its writePos from all others.
+        for (_, out) in deviceOutputs {
+            writeBeep(to: out.buffer, sampleRate: engineFormat.sampleRate)
+        }
         DLog("Test beep sent to '\(output.device.name)'")
 
         if needsStart {
@@ -779,7 +819,11 @@ final class MultiOutputEngine: ObservableObject {
             pcmBuffer.floatChannelData?[1][frame] = value
         }
 
-        output.buffer.write(pcmBuffer)
+        // Write chirp to ALL ring buffers to keep writePos synchronized.
+        // Only the target device's HAL unit is running, so chirp is only audible there.
+        for (_, out) in deviceOutputs {
+            out.buffer.write(pcmBuffer)
+        }
         DLog("Calibration chirp injected into '\(output.device.name)'")
 
         if needsStart {
@@ -1181,6 +1225,7 @@ final class MultiOutputEngine: ObservableObject {
         )
         deviceOutputs[device.uid] = output
         activeDeviceCount = deviceOutputs.count
+        _ringBufferSnapshot.update(Array(deviceOutputs.values.map { $0.buffer }))
 
         // If engine is already running, start the HAL unit immediately
         // (otherwise start() will start it when called)
@@ -1217,6 +1262,7 @@ final class MultiOutputEngine: ObservableObject {
         _karaokeBassLookup.remove(deviceUID)
         deviceOutputs.removeValue(forKey: deviceUID)
         activeDeviceCount = deviceOutputs.count
+        _ringBufferSnapshot.update(Array(deviceOutputs.values.map { $0.buffer }))
     }
 
     // MARK: - HAL Output Unit Creation
@@ -1596,20 +1642,13 @@ final class MultiOutputEngine: ObservableObject {
             return noErr
         }
 
-        // CPU overload guard: if CPU usage is critical, output silence to prevent
-        // audio glitches from missed deadlines. The cpuTimer updates cpuUsage every 0.5s.
-        if _cpuOverloadFlag.load() > 0 {
-            DelayedRingBuffer.fillSilence(ioData, frames: inNumberFrames)
-            return noErr
-        }
-
         // Look up ring buffer and volume — if either is missing, output silence
         guard let rb = _bufferLookup.get(uid) else {
             DelayedRingBuffer.fillSilence(ioData, frames: inNumberFrames)
             return noErr
         }
 
-        let individualVol = _volumeLookup.get(uid) ?? 0
+        let individualVol = _volumeLookup.get(uid) ?? 1.0
         let masterVol = _masterVolume.load()
         let vol = individualVol * masterVol
 
@@ -1764,15 +1803,17 @@ final class MultiOutputEngine: ObservableObject {
         }
         deviceOutputs.removeAll()
         activeDeviceCount = 0
+        _ringBufferSnapshot.update([])
     }
 
-    // MARK: - CPU
+    // MARK: - Diagnostics
 
     private func startCPUTimer() {
         stopCPUTimer()
-        cpuTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        // ponytail: lightweight diagnostics only, no CPU-based audio gating.
+        // ps subprocess every 0.5s blocked MainActor and killed audio on spikes.
+        cpuTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.updateCPUUsage()
                 self?.logDiagnostics()
             }
         }
@@ -1786,54 +1827,16 @@ final class MultiOutputEngine: ObservableObject {
         for (_, output) in deviceOutputs {
             let w = output.buffer._writeCount
             let r = output.buffer._readCount
+            let wp = output.buffer.currentWritePos
+            let rp = output.buffer.currentReadPos
+            let dist = wp - rp
+            let delay = output.buffer.currentDelayMs
+            let drift = output.buffer.lastDrift
             let vol = Self.volumeLookup.get(output.device.uid) ?? -1
-            DLog("diag: '\(output.device.name)' writes=\(w) reads=\(r) vol=\(String(format: "%.2f", vol))")
+            DLog("diag: '\(output.device.name)' writes=\(w) reads=\(r) vol=\(String(format: "%.2f", vol)) dist=\(dist) drift=\(drift) delayMs=\(String(format: "%.1f", delay))")
         }
     }
     private func stopCPUTimer() { cpuTimer?.invalidate(); cpuTimer = nil; cpuUsage = 0 }
-
-    /// Measure approximate CPU usage of the current process.
-    /// Uses `ps` command to get real CPU% rather than a fake formula.
-    private func updateCPUUsage() {
-        guard isRunning else { cpuUsage = 0; return }
-
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-p", "\(pid)", "-o", "%cpu=", "-o", "pcpu="]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
-            if let value = Double(output.components(separatedBy: .whitespaces).first ?? "0") {
-                cpuUsage = min(value, 100.0)
-                // Require sustained overload (3 consecutive readings >95%) before silencing.
-                // A single spike from starting HAL units should not kill audio.
-                if cpuUsage > 95 {
-                    cpuOverloadCount += 1
-                    if cpuOverloadCount >= 3 {
-                        _cpuOverloadFlag.store(1)
-                        DLog("[CPU Guard] Sustained overload (\(String(format: "%.1f", cpuUsage))%) — outputting silence")
-                    }
-                } else {
-                    cpuOverloadCount = 0
-                    if cpuUsage < 70 {
-                        _cpuOverloadFlag.store(0)
-                    }
-                }
-            } else {
-                cpuUsage = 0
-            }
-        } catch {
-            // Fallback: estimate based on active device count
-            cpuUsage = isRunning ? min(Double(activeDeviceCount) * 3.0 + 1.0, 100.0) : 0
-        }
-    }
 
     enum EngineError: LocalizedError {
         case halComponentNotFound, halInstanceCreationFailed, halConfigFailed

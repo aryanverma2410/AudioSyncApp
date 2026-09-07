@@ -21,7 +21,7 @@ private let kSafetyFrames: Int = 8192
 
 final class TestRingBuffer {
     private let buffer: UnsafeMutablePointer<Float>
-    private let frameCount: Int
+    let frameCount: Int
     private let channels: Int = 2
     private let frameMask: Int
     private let bufferSampleRate: Double
@@ -70,6 +70,46 @@ final class TestRingBuffer {
     func setDelayBuggy(ms: Float) {
         _delayFrames = Int(Double(ms) / 1000.0 * bufferSampleRate)
         // BUG: no readPos resync — drift correction takes thousands of callbacks
+    }
+
+    // read() mirrors the HAL render callback logic from MultiOutputEngine.
+    func read(frames: Int) -> Bool {
+        let wp = _writePos
+        var rp = _readPos
+        let totalBehind = _delayFrames + safetyFrames
+
+        // Drift correction with tolerance band + proportional nudge (mirrors production code)
+        // Direction: push readPos TOWARD totalBehind distance.
+        let currentDist = wp - rp
+        let driftTolerance = frames
+        let driftAmount = abs(currentDist - totalBehind)
+        if driftAmount > driftTolerance {
+            let nudge = max(1, min(driftAmount / 64, 256))
+            if currentDist < totalBehind - driftTolerance {
+                // Too close: fall back → rp decreases → distance grows
+                rp -= nudge
+                if rp < 0 { rp = 0 }
+            } else {
+                // Too far: catch up → rp increases → distance shrinks
+                rp += nudge
+            }
+        }
+
+        // Catastrophic overrun — preserve delay (mirrors production fix)
+        if wp - rp > frameCount {
+            rp = max(wp - totalBehind, 0)
+        }
+
+        // Underrun — advance readPos normally, preserve delay distance
+        if wp - rp < frames {
+            underrunCount += 1
+            _readPos = rp + frames
+            return false  // silence
+        }
+
+        _readPos = rp + frames
+        _readCount += 1
+        return true
     }
 
     func write(_ input: AVAudioPCMBuffer) {
@@ -264,6 +304,119 @@ test("testWriteAdvancesWritePos") {
     writeFrames(buf, frames: 512, sampleRate: sr)
     guard assertGreaterThan(buf.currentWritePos, initialWP, "writePos advances after write") else { return false }
     return assertEqual(buf.currentWritePos - initialWP, 512, "writePos advances by exactly frames written")
+}
+
+// MARK: - New Fix Tests (drift tolerance, underrun delay, overrun delay)
+
+// 9. Drift tolerance: steady-state reads with matching writes do NOT nudge readPos
+test("testDriftToleranceNoNudgeWithinBand") {
+    let buf = TestRingBuffer(capacitySeconds: 6.0, sampleRate: sr)
+    writeFrames(buf, frames: testWriteFrames, sampleRate: sr)
+
+    let delayMs: Float = 200
+    buf.setDelay(ms: delayMs)
+    let rp0 = buf.currentReadPos
+
+    // Steady state: writer and reader advance at same rate.
+    // Distance stays at totalBehind exactly — within tolerance band, no nudge.
+    let frames = 512
+    for _ in 0..<10 {
+        writeFrames(buf, frames: AVAudioFrameCount(frames), sampleRate: sr)
+        _ = buf.read(frames: frames)
+    }
+
+    // readPos should advance by exactly 10 * frames (no ±1 nudges)
+    let expectedRP = rp0 + 10 * frames
+    return assertEqual(buf.currentReadPos, expectedRP,
+        "readPos advanced by exactly 10*frames — no drift nudge in steady state")
+}
+
+// 10. Underrun preserves delay distance (not snapped to wp - totalBehind)
+test("testUnderrunPreservesDelay") {
+    let buf = TestRingBuffer(capacitySeconds: 6.0, sampleRate: sr)
+    let delayMs: Float = 200
+    let delayFrames = Int(Double(delayMs) / 1000.0 * sr)
+    buf.setDelay(ms: delayMs)
+
+    // Write enough to fill past safety + delay
+    let fillFrames = safetyFrames + delayFrames + 1000
+    writeFrames(buf, frames: AVAudioFrameCount(fillFrames), sampleRate: sr)
+
+    let rpBefore = buf.currentReadPos
+    let wp = buf.currentWritePos
+    let distBefore = wp - rpBefore
+
+    // Force underrun: read more than available in single call.
+    // Must exceed distBefore (total available) to trigger underrun.
+    let bigRead = distBefore + 512  // more than available
+    let result = buf.read(frames: bigRead)
+    guard assertEqual(result, false, "underrun returns silence (false)") else { return false }
+
+    // OLD behavior: _readPos = max(rp, wp - totalBehind) — snaps to different distance.
+    // NEW behavior: _readPos = rp + frames — advances normally, preserves delay gap.
+    // Allow up to 256 for proportional drift nudge that may occur before underrun check.
+    let rpAfter = buf.currentReadPos
+    let diff = abs(rpAfter - (rpBefore + bigRead))
+    if diff > 256 {
+        print("  ❌ FAIL: underrun readPos \(rpAfter), expected ~\(rpBefore + bigRead) (±256 drift), diff=\(diff)")
+        return false
+    }
+    print("  ✅ PASS: underrun advances readPos by ~frames (±256 proportional nudge), not snapped to wp - totalBehind")
+    return true
+}
+
+// 11. Catastrophic overrun preserves delay (not snapped to wp - safetyFrames = 0ms)
+test("testCatastrophicOverrunPreservesDelay") {
+    let buf = TestRingBuffer(capacitySeconds: 6.0, sampleRate: sr)
+    let delayMs: Float = 300
+    let delayFrames = Int(Double(delayMs) / 1000.0 * sr)  // 14400
+    let totalBehind = delayFrames + safetyFrames  // 22592
+
+    // Fill the buffer completely
+    writeFrames(buf, frames: AVAudioFrameCount(buf.frameCount), sampleRate: sr)
+
+    // Set delay — readPos snaps to wp - totalBehind
+    buf.setDelay(ms: delayMs)
+    let rpAfterSet = buf.currentReadPos
+    guard assertEqual(rpAfterSet, buf.currentWritePos - totalBehind,
+        "setDelay snaps readPos to wp - totalBehind") else { return false }
+
+    // Simulate catastrophic overrun: advance writePos past entire ring buffer
+    // by writing more frames than the ring can hold
+    writeFrames(buf, frames: AVAudioFrameCount(buf.frameCount + 1000), sampleRate: sr)
+
+    // Check distance BEFORE read — overrun handler fires inside read(),
+    // snaps rp to wp - totalBehind. After read advances by 512, distance = totalBehind - 512.
+    _ = buf.read(frames: 512)
+
+    let rp = buf.currentReadPos
+    let wp = buf.currentWritePos
+    let dist = wp - rp
+
+    // OLD behavior: rp = wp - safetyFrames → dist ≈ safetyFrames (0ms delay)
+    // NEW behavior: rp = max(wp - totalBehind, 0) → dist = totalBehind - 512 (delay preserved minus frames consumed)
+    let expectedDist = totalBehind - 512
+    return assertEqual(dist, expectedDist,
+        "catastrophic overrun preserves delay distance (totalBehind - frames consumed)")
+}
+
+// 12. setDelay + immediate read does NOT drift-nudge (tolerance covers it)
+test("testSetDelayThenReadNoDriftNudge") {
+    let buf = TestRingBuffer(capacitySeconds: 6.0, sampleRate: sr)
+    writeFrames(buf, frames: testWriteFrames, sampleRate: sr)
+
+    let delayMs: Float = 150
+    buf.setDelay(ms: delayMs)
+
+    let rp0 = buf.currentReadPos
+
+    // Immediate read after setDelay — currentDist == totalBehind exactly.
+    // Drift correction should NOT nudge (within tolerance band).
+    _ = buf.read(frames: 512)
+
+    // readPos should be rp0 + 512 (no ±1 nudge)
+    return assertEqual(buf.currentReadPos, rp0 + 512,
+        "setDelay + immediate read: no drift nudge (distance == target, within tolerance)")
 }
 
 // MARK: - Summary
