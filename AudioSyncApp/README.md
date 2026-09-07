@@ -1,32 +1,90 @@
-# AudioSync — Open-Source Airfoil Alternative for macOS
+<div align="center">
+
+# 🎵 AudioSync
+
+### Open-Source Airfoil Alternative for macOS
 
 Route **all system audio** to **multiple speakers simultaneously** — each with individual delay, volume, EQ, and role controls. Perfect for syncing Bluetooth speakers with your Mac.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/macOS-13%2B-blue" />
-  <img src="https://img.shields.io/badge/Swift-5.9-orange" />
-  <img src="https://img.shields.io/github/v/release/aryanverma2410/AudioSyncApp" />
+<p>
+  <img src="https://img.shields.io/badge/macOS-13%2B-blue?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Swift-5.9-orange?style=for-the-badge" />
+  <img src="https://img.shields.io/github/v/release/aryanverma2410/AudioSyncApp?style=for-the-badge&label=LATEST%20RELEASE" />
+  <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" />
 </p>
+
+<p>
+  <a href="https://github.com/aryanverma2410/AudioSyncApp/releases/latest">
+    <img src="https://img.shields.io/badge/⬇%20DOWNLOAD-DMG%20(v1.3)-success?style=for-the-badge&logo=apple" />
+  </a>
+</p>
+
+---
+
+</div>
+
+## 📸 Screenshots
+
+<div align="center">
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  🎵 AudioSync                                    [● Start]  │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  🔊 ZEB-DUKE PLUS                          Connected ✓      │
+│  ├─ Delay:  ████████░░░░░░░  186ms                         │
+│  ├─ Volume: ██████████████  100%                           │
+│  ├─ EQ:     Bass ████░░  Mid ██████  Treb ██░░░░             │
+│  └─ Role:   [ Both ]  [ Left ]  [ Right ]  [ Center ]       │
+│                                                             │
+│  🔊 ZEB-PODS 141 R                          Connected ✓      │
+│  ├─ Delay:  ████░░░░░░░░░░  72ms                           │
+│  ├─ Volume: ██████████████  100%                            │
+│  ├─ EQ:     Bass ████░░  Mid ██████  Treb ██░░░░            │
+│  └─ Role:   [ Both ]  [ Left ]  [ Right ]  [ Center ]       │
+│                                                             │
+├─────────────────────────────────────────────────────────────┤
+│  👑 Master Volume: ████████████░  85%                      │
+│  📡 Auto Sync  ·  🎤 Calibrate  ·  💾 Profiles  ·  🎹 Test  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+</div>
 
 ---
 
 ## ✨ Features
 
+### 🎯 Core Audio Routing
+
 | Feature | Description |
 |---|---|
-| 🎵 **System Audio Capture** | Captures all system audio (music, videos, games, browser) |
-| 🔊 **Multi-Device Output** | Route to unlimited speakers simultaneously |
+| 🎵 **System Audio Capture** | Captures all system audio — music, videos, games, browsers — via BlackHole or ScreenCaptureKit |
+| 🔊 **Multi-Device Output** | Route to unlimited speakers simultaneously — Bluetooth, USB, Built-in |
 | ⏱️ **Per-Speaker Delay** | 0–1000ms per device to sync Bluetooth latency |
 | 🔉 **Per-Speaker Volume & Mute** | Independent controls per device |
 | 🎛️ **Per-Speaker EQ** | Bass, Mid, Treble controls per speaker |
 | 🔄 **Speaker Roles** | Assign Left, Right, Center, or Both per speaker |
-| 👑 **Master Volume** | Single slider scales all speakers proportionally |
-| 🧠 **Habit Learning** | Remembers your preferred volume/delay per speaker |
+
+### 🧠 Intelligent Sync
+
+| Feature | Description |
+|---|---|
+| 🧠 **Habit Learning** | Remembers your preferred volume/delay per speaker — reconnects with saved settings |
 | 🎤 **Acoustic Calibration** | Uses the MacBook mic to auto-measure real speaker delays |
+| 🔧 **Auto Sync** | Measures latency and auto-compensates delays across all speakers |
+| 🎹 **Metronome** | Diagnostic click to all speakers for manual alignment testing |
+| 📡 **Hot-Plug Detection** | Auto-detects speakers connecting/disconnecting mid-session |
+
+### 🎛️ Advanced Controls
+
+| Feature | Description |
+|---|---|
+| 👑 **Master Volume** | Single slider scales all speakers proportionally |
 | 💾 **Room Profiles** | Save/switch configs (Living Room, Office, etc.) with ⌘1–5 |
-| 🔧 **Auto Sync** | Measures latency and auto-compensates delays |
-| 🎹 **Metronome** | Diagnostic click to all speakers for alignment testing |
-| 📡 **Hot-Plug Detection** | Auto-detects speakers connecting/disconnecting |
+| 📊 **Live Diagnostics** | Per-device buffer distance, drift, and delay monitoring |
+| ⌨️ **Global Hotkeys** | Control routing without switching apps |
 
 ---
 
@@ -34,7 +92,7 @@ Route **all system audio** to **multiple speakers simultaneously** — each with
 
 ### Option 1: Download DMG (Recommended)
 
-> **[⬇ Download AudioSync v1.1 DMG](https://github.com/aryanverma2410/AudioSyncApp/releases/download/v1.1/AudioSync.dmg)**
+> **[⬇ Download AudioSync v1.3 DMG](https://github.com/aryanverma2410/AudioSyncApp/releases/latest)**
 
 1. Download `AudioSync.dmg` from the link above or **[Releases](https://github.com/aryanverma2410/AudioSyncApp/releases)**
 2. Open the DMG → drag **AudioSyncApp.app** to **Applications**
@@ -65,7 +123,6 @@ AudioSync needs a way to capture your Mac's system audio. There are **two method
 #### Step 1: Install BlackHole
 
 ```bash
-# Install via Homebrew
 brew install blackhole-2ch
 ```
 
@@ -80,6 +137,21 @@ This sends audio to **both** your speakers AND BlackHole simultaneously:
 3. **Check** ☑️ all your speakers (MacBook Speakers, Bluetooth speakers, etc.)
 4. **Check** ☑️ **BlackHole 2ch**
 5. Rename it to something like **"AudioSync Multi-Output"**
+
+```
+┌─────────────────────────────────────────────────┐
+│  Audio MIDI Setup — Multi-Output Device          │
+│                                                   │
+│  ☑️ MacBook Speakers                              │
+│  ☑️ ZEB-DUKE PLUS (Bluetooth)                     │
+│  ☑️ ZEB-PODS 141 R (Bluetooth)                    │
+│  ☑️ BlackHole 2ch                                │
+│  ☐ Other unused devices...                        │
+│                                                   │
+│  Master Device: MacBook Speakers                  │
+│  Drift Correction: ✓ (enabled for master)         │
+└─────────────────────────────────────────────────┘
+```
 
 #### Step 3: Set the Multi-Output as Default
 
@@ -107,17 +179,6 @@ If you don't install BlackHole, AudioSync falls back to Apple's ScreenCaptureKit
 
 ---
 
-## 🎤 Microphone Permission (For Acoustic Calibration)
-
-The **Calibrate** feature uses your MacBook's built-in mic to measure real speaker latency. If you want to use it:
-
-1. Open **System Settings → Privacy & Security → Microphone**
-2. Enable **AudioSync**
-
-This is **optional** — the app works fully without mic access. You only need it for the acoustic calibration feature.
-
----
-
 ## 🚀 Usage
 
 1. **Launch AudioSync** — Your speakers appear automatically
@@ -140,33 +201,64 @@ This is **optional** — the app works fully without mic access. You only need i
 
 ## 🏗️ Architecture
 
+<div align="center">
+
 ```
-┌─────────────────────────────────────────────────┐
-│              System Audio Source                  │
-│  (BlackHole virtual device OR ScreenCaptureKit)  │
-└──────────────────┬──────────────────────────────┘
-                   │ AVAudioPCMBuffer
-                   ▼
-┌──────────────────────────────────────────────────┐
-│            MultiOutputEngine                      │
-│                                                   │
-│  ┌─────────┐   ┌─────────┐   ┌─────────┐        │
-│  │RingBuf  │   │RingBuf  │   │RingBuf  │        │
-│  │+Delay 0 │   │+Delay   │   │+Delay   │  …     │
-│  │+EQ      │   │+200ms   │   │+150ms   │        │
-│  │+Role    │   │+EQ      │   │+EQ      │        │
-│  └────┬────┘   └────┬────┘   └────┬────┘        │
-│       ▼             ▼             ▼              │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐        │
-│  │HAL Out  │  │HAL Out  │  │HAL Out  │        │
-│  │MacBook  │  │BT Spkr 1│  │BT Spkr 2│        │
-│  └─────────┘  └─────────┘  └─────────┘        │
-└──────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                     SYSTEM AUDIO SOURCE                       │
+│              (BlackHole virtual device OR SCStream)            │
+└──────────────────────────┬───────────────────────────────────┘
+                           │ AVAudioPCMBuffer
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    MultiOutputEngine                           │
+│                                                                │
+│   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐      │
+│   │ RingBuffer 1  │   │ RingBuffer 2  │   │ RingBuffer 3  │     │
+│   │ ───────────  │   │ ───────────  │   │ ───────────  │      │
+│   │ Delay: 0ms   │   │ Delay: 200ms │   │ Delay: 150ms │      │
+│   │ Volume: 100% │   │ Volume: 85%  │   │ Volume: 90%  │      │
+│   │ EQ: Flat     │   │ EQ: Bass+3dB │   │ EQ: Flat     │      │
+│   │ Role: Both   │   │ Role: Left   │   │ Role: Right  │      │
+│   └──────┬───────┘   └──────┬───────┘   └──────┬───────┘      │
+│          ▼                  ▼                  ▼               │
+│   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐      │
+│   │  HAL Output  │   │  HAL Output  │   │  HAL Output  │      │
+│   │  Unit #1     │   │  Unit #2     │   │  Unit #3     │      │
+│   │  Built-in    │   │  BT Speaker  │   │  BT Speaker  │      │
+│   └──────────────┘   └──────────────┘   └──────────────┘      │
+│                                                                │
+│   ┌─────────────────────────────────────────────────────────┐ │
+│   │  RingBufferSnapshot (lock-free read, no audio-thread    │ │
+│   │  allocation — os_unfair_lock guarded snapshot)          │ │
+│   └─────────────────────────────────────────────────────────┘ │
+│                                                                │
+│   ┌─────────────────────────────────────────────────────────┐ │
+│   │  Drift Correction Engine                                 │ │
+│   │  • Tolerance band: ±1 callback (~512 frames)             │ │
+│   │  • Proportional nudge: drift/64, capped at 256 samples   │ │
+│   │  • Direction: too-close → repeat, too-far → skip         │ │
+│   │  • OSMemoryBarrier after setDelay (ARM64 store ordering) │ │
+│   └─────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+</div>
+
+### Key Design Decisions
+
+| Component | Approach | Why |
+|---|---|---|
+| **Audio Capture** | BlackHole (primary) / ScreenCaptureKit (fallback) | BlackHole avoids permission dialogs |
+| **Ring Buffers** | Per-device `DelayedRingBuffer` with 10.9s capacity | Absorbs Bluetooth jitter + enables per-device delay |
+| **Thread Safety** | `RingBufferSnapshot` with `os_unfair_lock` | Zero allocation on audio thread |
+| **Drift Correction** | Proportional nudge toward target distance | Corrects BT clock drift without audible clicks |
+| **Device Output** | HAL Output Units via `AudioComponentFindNext` | Direct hardware access, lowest latency |
+| **State Management** | `@Published` + `ObservableObject` (SwiftUI) | Live UI updates from CoreAudio listeners |
 
 ---
 
-## 🛠️ Building from Source (Developer)
+## 🔧 Building from Source (Developer)
 
 ### Prerequisites
 
@@ -183,6 +275,14 @@ swift build -c release       # Release build
 swift run                    # Build + run
 ```
 
+### Run Tests
+
+```bash
+cd AudioSyncApp
+swift test                    # XCTest suite
+swift Tests/DelayedRingBufferTests.swift  # Ring buffer unit tests (12 tests)
+```
+
 ### Open in Xcode
 
 ```bash
@@ -193,23 +293,79 @@ open .swiftpm/xcode/package.xcworkspace
 ### Create a DMG Locally
 
 ```bash
-brew install create-dmg
-swift build -c release
-
-# Create app bundle
-mkdir -p dist/AudioSync.app/Contents/MacOS
-cp .build/release/AudioSyncApp dist/AudioSync.app/Contents/MacOS/AudioSync
-
-# Create DMG
-create-dmg --volname "AudioSync" --app-drop-link 425 190 AudioSync.dmg dist/
+cd AudioSyncApp
+bash build_app.sh             # Build + create .app bundle + codesign
 ```
+
+---
+
+## 📋 What's New
+
+### v1.3 — Drift Correction Fix + Enhanced Diagnostics
+
+**Fixed:** 5–10 second delay accumulation on certain Bluetooth speakers (ZEB-PODS 141 R)
+
+**Root cause:** Drift correction directions were **reversed**. Both branches pushed `readPos` *away* from target distance instead of *toward* it. The proportional nudge (up to 256 samples/callback) amplified drift 64× faster than the old ±1/callback approach.
+
+| Bug | Symptom | Fix |
+|---|---|---|
+| Drift direction reversed | 5–10s delay on ZEB-PODS, not on other speakers | Corrected: too-close → `rp -= nudge` (repeat), too-far → `rp += nudge` (skip) |
+| setDelay + reversed drift | Static/crackling noise immediately after changing delay | Fixed by correcting drift direction — no more discontinuity |
+| Delay "keeps changing" | Drift correction fighting user-set delay | Tolerance band (±1 callback) prevents nudging in steady state |
+
+**Added:**
+- Per-device diagnostics: `dist` (buffer distance), `drift` (deviation from target), `delayMs` per device
+- `currentDelayMs` computed property on `DelayedRingBuffer`
+- 4 new ring buffer unit tests (12 total, all passing)
+
+### v1.2 — Audio Engine Overhaul
+
+- Ring buffer snapshot (zero audio-thread allocation via `os_unfair_lock`)
+- `OSMemoryBarrier()` after `setDelay` for ARM64 store ordering
+- CPU overload guard removed (was causing false silences)
+- `volumeLookup` default 1.0 (was 0 = silence during device add/remove)
+- `injectTestTone` writes to all ring buffers (was desyncing write positions)
+- 12 ring buffer unit tests
+
+### v1.1 — Features
+
+- Per-speaker EQ (Bass/Treble/Mid)
+- Speaker roles (Left/Right/Center)
+- Room profiles with persistence
+- Habit learning for volume/delay
+- Acoustic calibration via mic
+- Master volume control
+- Metronome with per-speaker output
+
+---
+
+## 📊 Diagnostics
+
+AudioSync logs per-device diagnostics every 2 seconds:
+
+```
+diag: captureBufs=54530 capturePeak=0.3402 devices=2
+diag: 'ZEB-DUKE PLUS' writes=45002 reads=41344 vol=1.00 dist=24576 drift=0 delayMs=186.0
+diag: 'ZEB-PODS 141 R' writes=33749 reads=30869 vol=1.00 dist=23552 drift=-128 delayMs=72.0
+```
+
+| Field | Meaning |
+|---|---|
+| `captureBufs` | Total audio buffers received from BlackHole/SCStream |
+| `capturePeak` | Peak audio level (0.0 = silence, 1.0 = full scale) |
+| `writes` / `reads` | Write/read call counts (not positions) |
+| `dist` | Current `writePos - readPos` (actual buffer fill in frames) |
+| `drift` | `dist - targetDistance` (positive = too far, negative = too close) |
+| `delayMs` | User-set delay in milliseconds |
+
+**Log location:** `~/Library/Logs/AudioSyncApp.log`
 
 ---
 
 ## 🔮 Roadmap
 
 - [ ] Code signing & notarization for frictionless install
-- [ ] Real audio synchronization algorithms (drift correction)
+- [x] Drift correction algorithms (v1.3)
 - [ ] Virtual audio driver (eliminate BlackHole dependency)
 - [ ] Network audio (send to other Macs, like real Airfoil)
 - [ ] DSP effects (compression, loudness normalization)
@@ -225,11 +381,26 @@ create-dmg --volname "AudioSync" --app-drop-link 425 190 AudioSync.dmg dist/
 | Only one speaker plays | Create a Multi-Output Device in Audio MIDI Setup with all speakers checked |
 | Screen Recording permission loop | Install BlackHole (Method 1) to bypass SCStream entirely |
 | Bluetooth speakers out of sync | Use **Auto Sync** or **Calibrate** to measure and compensate delays |
+| One speaker 5-10s behind others | Update to v1.3 — drift correction direction bug fixed |
+| Static noise after setting delay | Update to v1.3 — reversed drift correction caused discontinuity |
+| Delay keeps changing | Update to v1.3 — tolerance band prevents steady-state nudging |
 | App won't open (Gatekeeper) | Right-click → Open, or `xattr -cr /Applications/AudioSync.app` |
 | Devices not appearing | Click **⟳ Refresh** or reconnect the device |
 
 ---
 
-## License
+## 📝 License
 
 MIT
+
+---
+
+<div align="center">
+
+**Built with** 🎵 **SwiftUI + AVFoundation + CoreAudio on macOS**
+
+[Report Bug](https://github.com/aryanverma2410/AudioSyncApp/issues) ·
+[Request Feature](https://github.com/aryanverma2410/AudioSyncApp/issues) ·
+[Releases](https://github.com/aryanverma2410/AudioSyncApp/releases)
+
+</div>
