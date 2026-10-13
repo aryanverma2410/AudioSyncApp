@@ -8,7 +8,7 @@ import Darwin
 
 private let kEngineSampleRate: Double = 48000
 private let kEngineChannels: UInt32 = 2
-private let kSafetyFrames: Int = 8192        // ~170ms at 48kHz — BT codec headroom (was 4096)
+private let kSafetyFrames: Int = 16384       // ~340ms at 48kHz — absorbs BT codec burstiness (Echo, AirPods)
 private let kRingBufferPower: Int = 19       // 2^19 = 524288 frames ≈ 10.9s at 48kHz
 private let kMaxDelayMs: Float = 5000        // Allow up to 5s delay for auto-compensation
 
@@ -100,7 +100,8 @@ final class DelayedRingBuffer: @unchecked Sendable {
     private var _resamplePhase: Double = 0  // Carried fractional position for linear resampling
 
     // Safety margin: minimum distance between write and read (prevents underrun on BT)
-    // BT codecs add 100-200ms latency; kSafetyFrames ≈ 85ms at 48kHz gives enough headroom.
+    // BT codecs add 100-300ms latency + bursty HAL callbacks (pause-then-burst pattern).
+    // 16384 frames ≈ 340ms at 48kHz absorbs worst-case BT burstiness (Echo, AirPods).
     private let safetyFrames: Int = kSafetyFrames
 
     private(set) var _writeCount: Int = 0
@@ -1832,8 +1833,10 @@ final class MultiOutputEngine: ObservableObject {
             let dist = wp - rp
             let delay = output.buffer.currentDelayMs
             let drift = output.buffer.lastDrift
+            let underruns = output.buffer.underrunCount
             let vol = Self.volumeLookup.get(output.device.uid) ?? -1
-            DLog("diag: '\(output.device.name)' writes=\(w) reads=\(r) vol=\(String(format: "%.2f", vol)) dist=\(dist) drift=\(drift) delayMs=\(String(format: "%.1f", delay))")
+            let wrDelta = w - r
+            DLog("diag: '\(output.device.name)' w=\(w) r=\(r) Δ=\(wrDelta) vol=\(String(format: "%.2f", vol)) dist=\(dist) drift=\(drift) underrun=\(underruns) delayMs=\(String(format: "%.1f", delay))")
         }
     }
     private func stopCPUTimer() { cpuTimer?.invalidate(); cpuTimer = nil; cpuUsage = 0 }

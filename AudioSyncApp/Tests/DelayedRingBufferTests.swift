@@ -13,7 +13,7 @@ import AudioToolbox
 
 // Inline the constants we need
 private let kEngineSampleRate: Double = 48000
-private let kSafetyFrames: Int = 8192
+private let kSafetyFrames: Int = 16384
 
 // Minimal reimplementation of DelayedRingBuffer for testing.
 // This mirrors the exact setDelay/read logic from MultiOutputEngine.swift.
@@ -200,8 +200,8 @@ let safetyFrames = kSafetyFrames
 let sr: Double = 48000
 
 // Write enough frames to exceed safetyFrames + max delay frames.
-// 500ms at 48kHz = 24000 frames; safety = 8192; total = 32192. Write 32768.
-let testWriteFrames: AVAudioFrameCount = 32768
+// 800ms at 48kHz = 38400 frames; safety = 16384; total = 54784. Write 65536.
+let testWriteFrames: AVAudioFrameCount = 65536
 
 // 1. setDelay immediately resyncs readPos
 test("testSetDelayResyncsReadPosImmediately") {
@@ -734,8 +734,8 @@ test("testDelayRemainsSetAfterProlongedUse") {
 test("testSetDelayConvergenceFromExtremeOffset") {
     let buf = TestRingBuffer(capacitySeconds: 10.0, sampleRate: sr)
 
-    // Write enough frames to support 800ms delay (38400 + 8192 = 46592 totalBehind)
-    let bigWrite: AVAudioFrameCount = 50000
+    // Write enough frames to support 800ms delay (38400 + 16384 = 54784 totalBehind)
+    let bigWrite: AVAudioFrameCount = 70000
     writeFrames(buf, frames: bigWrite, sampleRate: sr)
 
     // Start with 0ms delay
